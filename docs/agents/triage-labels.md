@@ -24,7 +24,7 @@ ask a maintainer to complete setup before proceeding.
 1. Read every existing repository label:
 
    ```sh
-   gh api --paginate 'repos/OneXray/boring/labels?per_page=100' --jq '.[].name'
+   gh api --paginate 'repos/YuanDevTeam/boring/labels?per_page=100' --jq '.[].name'
    ```
 
 2. Compare that list with the table above and the exact `wayfinder:*` names in
@@ -32,7 +32,7 @@ ask a maintainer to complete setup before proceeding.
    with its documented purpose:
 
    ```sh
-   gh label create "<missing-label>" --repo OneXray/boring --description "<purpose>"
+   gh label create "<missing-label>" --repo YuanDevTeam/boring --description "<purpose>"
    ```
 
    Keep existing labels, colors and descriptions unchanged; omit `--force`.
