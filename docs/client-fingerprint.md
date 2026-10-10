@@ -4,7 +4,8 @@ Enable `boring/client-fingerprint` or `tokio-boring/client-fingerprint` on this
 fork. The implemented fixed profiles are `ClientFingerprint::Chrome120` (classic
 X25519), `Chrome133` (ordinary TLS with native X25519MLKEM768 and X25519 shares,
 new ALPS and no padding), `Firefox120` (X25519/P-256 shares and fixed order) and
-`Safari16` (Safari 16.0, fixed order and Zlib). They are not aliases following a
+`Safari16` (Safari 16.0, fixed order and Zlib) and `Ios14` (iOS 14, fixed order,
+CBC-SHA256 offers and no certificate compression). They are not aliases following a
 browser release automatically. Unknown profile names
 must be rejected by applications; this library does not silently map them to a
 different browser.
@@ -38,7 +39,7 @@ Restricting TLS versions or ALPN intentionally changes the resulting wire shape.
 
 The profile configures ciphers, supported groups, signature algorithms, GREASE,
 extension permutation, SCT/OCSP, ECH GREASE and template-specific h2 ALPS. Certificate
-compression uses real Brotli for Chrome and Zlib for Safari; Firefox does not
+compression uses real Brotli for Chrome and Zlib for Safari; Firefox and iOS do not
 advertise it. This is not an advertised-only extension. The
 native certificate-message allocation and decoder output are bounded to 128 KiB.
 The profile does not disable certificate verification, weaken handshake signature
@@ -58,7 +59,7 @@ exception and native CertificateVerify checks remain in the native handshake.
 The full connection-local invariants and deliberately unsupported combinations
 are documented in [REALITY](reality-client.md).
 
-The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) cover all four
+The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) cover the four originally accepted
 profiles' classic REALITY shape and authentication binding. Classic mode removes
 Chrome133's ML-KEM group/share and preserves Firefox's additional P-256 share.
 Independent VCore/Mihomo data paths still require application integration and
@@ -66,7 +67,7 @@ fresh container acceptance; ordinary-TLS ML-KEM is not PQ REALITY.
 
 For explicit hybrid REALITY, only Chrome133 among this fixed catalog has the
 required group/share. Configure `RealityClientConfig::require_x25519mlkem768`
-separately; classic remains the default. The other three profiles fail rather
+separately; classic remains the default. The other fixed profiles fail rather
 than changing their wire identities. Both actual hybrid negotiation and native
 REALITY authentication are required. See the independent [hybrid fork gate](reality-hybrid.md);
 its checks do not establish VCore's production/download-leg support.
@@ -137,3 +138,20 @@ of this validation the fork branch was local/unpublished; the initial VCore
 dependency-resolution attempt was removed rather than leaving a sibling path
 dependency or an unresolved lockfile. Publishing this branch makes its interfaces
 available for a pinned Git dependency; VCore integration is validated separately.
+
+## iOS 14 source and cipher boundary
+
+`Ios14` is independently implemented from the wire fields in the official
+[uTLS v1.8.8 iOS14 template](https://github.com/MetaCubeX/utls/blob/v1.8.8/u_parrots.go#L1654).
+The native catalog has its own profile ID and cipher list. It offers the real
+CBC-SHA256 suites c023, c027 and 003c; the last uses existing native RSA,
+AES-128-CBC, HMAC-SHA256 and TLS1.2 PRF primitives. It remains deprecated and
+excluded from default cipher aliases. No TLS1.0/1.1 floor is restored by the profile.
+
+The reference's disabled c024, c028 and 003d, and its template-only c008, are
+wire declarations whose actual selection fails. Certificate compression is
+absent. Signature duplication, cold ticket omission, GREASE and conditional
+padding are connection-local encoding rules. Trust, identity, ALPN, TLS versions,
+transcript, key generation and Finished remain native and caller-owned.
+The uTLS source was used only as a behavior reference; no Go functions were
+copied or translated. Existing BoringSSL and Rust wrapper licenses are retained.

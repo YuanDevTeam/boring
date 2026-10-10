@@ -243,6 +243,96 @@ fn check_safari(reality: bool) {
     }
 }
 
+// Expected wire constants: independently checked against fixed uTLS v1.8.8 iOS14.
+fn check_ios(reality: bool) {
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder
+        .set_min_proto_version(Some(SslVersion::TLS1_2))
+        .unwrap();
+    let connector = FingerprintConnector::new(builder, ClientFingerprint::Ios14).unwrap();
+    for _ in 0..8 {
+        let error = configuration(&connector, reality)
+            .connect("fingerprint.test", Capture::default())
+            .unwrap_err();
+        let boring::ssl::HandshakeError::WouldBlock(stream) = error else {
+            panic!("expected hello");
+        };
+        let mut record = stream.get_ref().0.as_slice();
+        assert_eq!(take(&mut record, 3), &[22, 3, 1]);
+        let mut hello = vector(&mut record, 2);
+        assert!(record.is_empty());
+        assert_eq!(take(&mut hello, 1), &[1]);
+        let mut body = vector(&mut hello, 3);
+        assert!(hello.is_empty());
+        assert_eq!(take(&mut body, 2), &[3, 3]);
+        take(&mut body, 32);
+        assert_eq!(vector(&mut body, 1).len(), 32);
+        let ciphers = codes(vector(&mut body, 2));
+        assert!(grease(ciphers[0]));
+        assert_eq!(
+            &ciphers[1..],
+            &[
+                0x1301, 0x1302, 0x1303, 0xc02c, 0xc02b, 0xcca9, 0xc030, 0xc02f, 0xcca8, 0xc024,
+                0xc023, 0xc00a, 0xc009, 0xc028, 0xc027, 0xc014, 0xc013, 0x009d, 0x009c, 0x003d,
+                0x003c, 0x0035, 0x002f, 0xc008, 0xc012, 0x000a
+            ]
+        );
+        assert_eq!(vector(&mut body, 1), &[0]);
+        let mut ext = vector(&mut body, 2);
+        assert!(body.is_empty());
+        let mut rows = vec![];
+        while !ext.is_empty() {
+            let kind = codes(take(&mut ext, 2))[0];
+            rows.push((kind, vector(&mut ext, 2)));
+        }
+        assert!(grease(rows[0].0));
+        assert!(rows[0].1.is_empty());
+        let last = rows.len() - 1 - usize::from(rows.last().unwrap().0 == 21);
+        assert!(grease(rows[last].0));
+        assert_eq!(rows[last].1, &[0]);
+        assert_eq!(
+            rows[1..last].iter().map(|r| r.0).collect::<Vec<_>>(),
+            [0, 23, 65281, 10, 11, 16, 5, 13, 18, 51, 45, 43]
+        );
+        let value = |id| rows.iter().find(|r| r.0 == id).unwrap().1;
+        assert_eq!(&value(0)[5..], b"fingerprint.test");
+        assert_eq!(value(16), b"\0\x0c\x02h2\x08http/1.1");
+        assert!(!rows.iter().any(|r| r.0 == 27 || r.0 == 35));
+        assert_eq!(
+            codes(&value(13)[2..]),
+            [
+                0x0403, 0x0804, 0x0401, 0x0503, 0x0203, 0x0805, 0x0805, 0x0501, 0x0806, 0x0601,
+                0x0201
+            ]
+        );
+        assert_eq!(&value(43)[3..], &[3, 4, 3, 3]); // Approved TLS1.2 floor.
+        let groups = codes(&value(10)[2..]);
+        assert!(grease(groups[0]));
+        assert_eq!(&groups[1..], &[29, 23, 24, 25]);
+        let mut shares = &value(51)[2..];
+        for (id, size) in [(groups[0], 1), (29, 32)] {
+            assert_eq!(codes(take(&mut shares, 2)), [id]);
+            assert_eq!(vector(&mut shares, 2).len(), size);
+        }
+        assert!(shares.is_empty());
+        for (id, expected) in [
+            (23, &[][..]),
+            (65281, &[0]),
+            (11, &[1, 0]),
+            (5, &[1, 0, 0, 0, 0]),
+            (18, &[]),
+            (45, &[1, 1]),
+        ] {
+            assert_eq!(value(id), expected);
+        }
+        let padding = value(21);
+        let unpadded = stream.get_ref().0.len() - 5 - padding.len() - 4;
+        assert!((256..512).contains(&unpadded));
+        assert_eq!(padding.len(), 512 - unpadded - 4);
+        assert!(padding.iter().all(|b| *b == 0));
+    }
+}
+
 fn check_chrome133(reality: bool) {
     // Independent expected fields: CF0 official Mihomo v1.19.31 / uTLS v1.8.7
     // Chrome133, not data loaded from the implementation's profile table.
@@ -381,4 +471,29 @@ fn classic_reality_preserves_each_new_profile_except_required_mlkem_removal() {
     check_chrome133(true);
     check_firefox(true);
     check_safari(true);
+}
+
+#[test]
+fn ios14_preserves_its_independent_cipher_and_extension_vectors() {
+    check_ios(false);
+}
+
+#[test]
+fn ios_rsa_sha256_cipher_is_excluded_from_the_default_offer() {
+    let connector = SslConnector::builder(SslMethod::tls()).unwrap().build();
+    let error = connector
+        .configure()
+        .unwrap()
+        .connect("fingerprint.test", Capture::default())
+        .unwrap_err();
+    let boring::ssl::HandshakeError::WouldBlock(stream) = error else {
+        panic!("expected hello");
+    };
+    let mut record = stream.get_ref().0.as_slice();
+    take(&mut record, 3);
+    let mut hello = vector(&mut record, 2);
+    take(&mut hello, 4);
+    take(&mut hello, 34);
+    vector(&mut hello, 1);
+    assert!(!codes(vector(&mut hello, 2)).contains(&0x003c));
 }

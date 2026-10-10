@@ -22,6 +22,8 @@ pub enum ClientFingerprint {
     Firefox120,
     /// Safari 16.0's stream profile. The caller still owns the TLS version floor.
     Safari16,
+    /// iOS 14 stream profile, with CBC-SHA256 offers and no certificate compression.
+    Ios14,
 }
 
 // A closed, bounded catalog, not user-supplied extension/cipher data. The native
@@ -54,6 +56,7 @@ impl ClientFingerprint {
             Self::Chrome133 => &CHROME133,
             Self::Firefox120 => &FIREFOX120,
             Self::Safari16 => &SAFARI16,
+            Self::Ios14 => &IOS14,
         }
     }
 }
@@ -139,6 +142,24 @@ const SAFARI16: Profile = Profile {
     ech_grease: false,
     alps_new_codepoint: None,
     compression: Compression::Zlib,
+};
+
+// Independently implemented from observed uTLS v1.8.8 HelloIOS_14 wire fields.
+// It has its own cipher/compression policy; sharing immutable group/signature
+// values does not select Safari's native profile or compression extension.
+const IOS14: Profile = Profile {
+    native_id: 5,
+    ciphers: concat!(
+        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:",
+        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384:",
+        "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305:",
+        "ECDHE-ECDSA-AES128-SHA256:ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
+        "ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES128-SHA:",
+        "AES256-GCM-SHA384:AES128-GCM-SHA256:AES128-SHA256:AES256-SHA:AES128-SHA:",
+        "ECDHE-RSA-DES-CBC3-SHA:DES-CBC3-SHA"
+    ),
+    compression: Compression::None,
+    ..SAFARI16
 };
 
 /// Immutable profile plus caller-configured TLS trust, versions and identity.
