@@ -2,7 +2,7 @@
 //! by the caller; a profile never changes certificate verification or dials.
 use super::{
     CertificateCompressionAlgorithm, CertificateCompressor, ConnectConfiguration, SslConnector,
-    SslConnectorBuilder, SslRef,
+    SslConnectorBuilder, SslRef, SslVersion,
 };
 use crate::{cvt, error::ErrorStack, ffi};
 use foreign_types::ForeignTypeRef;
@@ -24,6 +24,14 @@ pub enum ClientFingerprint {
     Safari16,
     /// iOS 14 stream profile, with CBC-SHA256 offers and no certificate compression.
     Ios14,
+    /// Android 11 OkHttp's TLS 1.2 profile, without GREASE or compression.
+    Android11,
+    /// Edge 85, the current reference's default Edge profile.
+    Edge85,
+    /// 360 Browser 7.5's supported TLS 1.2 cipher and extension subset.
+    ThreeSixty75,
+    /// QQ 11.1, including its old-codepoint h2 ALPS declaration.
+    Qq111,
 }
 
 // A closed, bounded catalog, not user-supplied extension/cipher data. The native
@@ -41,6 +49,7 @@ struct Profile {
     ech_grease: bool,
     alps_new_codepoint: Option<bool>,
     compression: Compression,
+    tls12_only: bool,
 }
 
 enum Compression {
@@ -57,6 +66,10 @@ impl ClientFingerprint {
             Self::Firefox120 => &FIREFOX120,
             Self::Safari16 => &SAFARI16,
             Self::Ios14 => &IOS14,
+            Self::Android11 => &ANDROID11,
+            Self::Edge85 => &EDGE85,
+            Self::ThreeSixty75 => &THREE_SIXTY75,
+            Self::Qq111 => &QQ111,
         }
     }
 }
@@ -83,6 +96,7 @@ const CHROME120: Profile = Profile {
     ech_grease: true,
     alps_new_codepoint: Some(false),
     compression: Compression::Brotli,
+    tls12_only: false,
 };
 
 const CHROME133: Profile = Profile {
@@ -116,6 +130,7 @@ const FIREFOX120: Profile = Profile {
     ech_grease: true,
     alps_new_codepoint: None,
     compression: Compression::None,
+    tls12_only: false,
 };
 
 const SAFARI16: Profile = Profile {
@@ -142,6 +157,7 @@ const SAFARI16: Profile = Profile {
     ech_grease: false,
     alps_new_codepoint: None,
     compression: Compression::Zlib,
+    tls12_only: false,
 };
 
 // Independently implemented from observed uTLS v1.8.8 HelloIOS_14 wire fields.
@@ -162,6 +178,63 @@ const IOS14: Profile = Profile {
     ..SAFARI16
 };
 
+// Fixed upstream profiles: MetaCubeX/utls HelloAndroid_11_OkHttp,
+// HelloEdge_85, Hello360_7_5 and HelloQQ_11_1. Only implemented negotiation
+// capabilities are enabled; fake DHE/DSA, RC4 and disabled CBC-SHA256 suites
+// from the historical 360 hello are deliberately not made selectable.
+const ANDROID11: Profile = Profile {
+    native_id: 6,
+    ciphers: concat!(
+        "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:",
+        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-GCM-SHA256:",
+        "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305:",
+        "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:",
+        "AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA"
+    ),
+    signatures: concat!(
+        "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
+        "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
+        "rsa_pss_rsae_sha512:rsa_pkcs1_sha512:rsa_pkcs1_sha1"
+    ),
+    grease: false,
+    shuffle: false,
+    sct: false,
+    ech_grease: false,
+    alps_new_codepoint: None,
+    compression: Compression::None,
+    tls12_only: true,
+    ..CHROME120
+};
+
+const EDGE85: Profile = Profile {
+    native_id: 7,
+    shuffle: false,
+    ech_grease: false,
+    alps_new_codepoint: None,
+    ..CHROME120
+};
+
+const THREE_SIXTY75: Profile = Profile {
+    native_id: 8,
+    ciphers: concat!(
+        "ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:AES256-SHA:",
+        "ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES128-SHA:AES128-SHA:DES-CBC3-SHA"
+    ),
+    groups: &[23, 24, 25],
+    key_shares: &[],
+    signatures: concat!(
+        "rsa_pkcs1_sha256:rsa_pkcs1_sha384:rsa_pkcs1_sha1:",
+        "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_sha1"
+    ),
+    ..ANDROID11
+};
+
+const QQ111: Profile = Profile {
+    native_id: 9,
+    alps_new_codepoint: Some(false),
+    ..EDGE85
+};
+
 /// Immutable profile plus caller-configured TLS trust, versions and identity.
 /// Each connection supplies its transport ALPN; no profile can override it.
 #[derive(Debug, Clone)]
@@ -179,6 +252,11 @@ impl FingerprintConnector {
         profile: ClientFingerprint,
     ) -> Result<Self, ErrorStack> {
         let spec = profile.profile();
+        if spec.tls12_only {
+            // Do not turn a historical TLS1.2 profile into a fake TLS1.3 hello.
+            // A caller's higher minimum remains enforced by the native engine.
+            builder.set_max_proto_version(Some(SslVersion::TLS1_2))?;
+        }
         builder.set_strict_cipher_list(spec.ciphers)?;
         builder.set_sigalgs_list(spec.signatures)?;
         builder.set_grease_enabled(spec.grease);
@@ -212,6 +290,20 @@ impl FingerprintConnector {
     /// per-connection SNI/verification and opt-in REALITY through their normal
     /// interfaces. Do not subsequently override its ALPN/profile settings.
     pub fn configure(&self, alpn: &[u8]) -> Result<ConnectConfiguration, ErrorStack> {
+        self.configure_with_application_settings(alpn, true)
+    }
+
+    /// Prepares one connection, optionally declaring the profile's h2 ALPS.
+    ///
+    /// Set `application_settings` to false when the caller's HTTP/2 engine
+    /// consumes standard SETTINGS frames but cannot import TLS ALPS. This only
+    /// omits an optional extension; it never discards negotiated peer settings.
+    /// The caller must not add ALPS later unless it can consume those settings.
+    pub fn configure_with_application_settings(
+        &self,
+        alpn: &[u8],
+        application_settings: bool,
+    ) -> Result<ConnectConfiguration, ErrorStack> {
         let mut config = self.connector.configure()?;
         let spec = self.profile.profile();
         unsafe {
@@ -237,7 +329,10 @@ impl FingerprintConnector {
             offers_h2 |= protocol == b"h2";
             protocols = rest;
         }
-        if let Some(new_codepoint) = spec.alps_new_codepoint.filter(|_| offers_h2) {
+        if let Some(new_codepoint) = spec
+            .alps_new_codepoint
+            .filter(|_| offers_h2 && application_settings)
+        {
             unsafe {
                 ffi::SSL_set_alps_use_new_codepoint(config.as_ptr(), new_codepoint.into());
                 cvt(ffi::SSL_add_application_settings(

@@ -2,13 +2,14 @@ diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
 index 055b3e0..d6bcbb6 100644
 --- a/include/openssl/ssl.h
 +++ b/include/openssl/ssl.h
-@@ -5512,6 +5512,13 @@ OPENSSL_EXPORT void SSL_CTX_set_permute_extensions(SSL_CTX *ctx, int enabled);
+@@ -5512,6 +5512,14 @@ OPENSSL_EXPORT void SSL_CTX_set_permute_extensions(SSL_CTX *ctx, int enabled);
  // permute extensions. For now, this is only implemented for the ClientHello.
  OPENSSL_EXPORT void SSL_set_permute_extensions(SSL *ssl, int enabled);
  
 +// Opt-in named profile encoding from this fork. Only built-in, implemented
 +// profile IDs are accepted (1 = Chrome120, 2 = Chrome133, 3 = Firefox120,
-+// 4 = Safari16, 5 = iOS14).
++// 4 = Safari16, 5 = iOS14, 6 = Android11, 7 = Edge85,
++// 8 = 360 7.5, 9 = QQ 11.1).
 +// Trust, versions, ALPN and sessions
 +// remain caller-owned. Fresh stream clients only; no raw ClientHello API.
 +OPENSSL_EXPORT int SSL_set_client_fingerprint(SSL *ssl, unsigned profile);
@@ -64,14 +65,15 @@ index db1a291..32908a7 100644
    }
    return true;
  }
-@@ -941,6 +948,14 @@ static bool ext_ticket_add_clienthello(const SSL_HANDSHAKE *hs, CBB *out,
+@@ -941,6 +948,15 @@ static bool ext_ticket_add_clienthello(const SSL_HANDSHAKE *hs, CBB *out,
        SSL_get_options(ssl) & SSL_OP_NO_TICKET) {
      return true;
    }
-+  // Safari's cold template omits this extension. A caller's actual TLS1.2
-+  // ticket may still be offered; warm policy is intentionally caller-owned.
++  // Safari, iOS and Android cold templates omit this extension. A caller's
++  // actual TLS1.2 ticket may still be offered; warm policy is caller-owned.
 +  if ((hs->config->client_fingerprint == 4 ||
-+       hs->config->client_fingerprint == 5) &&
++       hs->config->client_fingerprint == 5 ||
++       hs->config->client_fingerprint == 6) &&
 +      (ssl->session == nullptr ||
 +       ssl_session_get_type(ssl->session.get()) != SSLSessionType::kTicket)) {
 +    return true;
@@ -133,28 +135,43 @@ index db1a291..32908a7 100644
      {
          TLSEXT_TYPE_server_name,
          ext_sni_add_clienthello,
-@@ -4297,6 +4343,48 @@ static_assert(kNumExtensions <=
+@@ -4297,6 +4343,63 @@ static_assert(kNumExtensions <=
                "too many extensions for received bitset");
  
  bool ssl_setup_extension_permutation(SSL_HANDSHAKE *hs) {
 +  if (hs->config->client_fingerprint >= 3 &&
-+      hs->config->client_fingerprint <= 5) {
++      hs->config->client_fingerprint <= 9) {
 +    static const uint16_t kFirefox[] = {
 +        0, 23, 65281, 10, 11, 35, 16, 5, 34, 51, 43, 13, 45, 28, 65037};
 +    static const uint16_t kSafari[] = {
 +        0, 23, 65281, 10, 11, 16, 5, 13, 18, 51, 45, 43, 27};
 +    static const uint16_t kIos[] = {
 +        0, 23, 65281, 10, 11, 16, 5, 13, 18, 51, 45, 43};
++    static const uint16_t kAndroid[] = {
++        0, 23, 65281, 10, 11, 5, 13};
++    static const uint16_t kEdge[] = {
++        0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 27};
++    static const uint16_t kThreeSixty[] = {
++        0, 65281, 10, 11, 35, 16, 5, 13};
++    static const uint16_t kQq[] = {
++        0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 27, 17513};
 +    Array<uint8_t> permutation;
 +    if (!permutation.InitForOverwrite(kNumExtensions)) {
 +      return false;
 +    }
 +    bool used[kNumExtensions] = {};
 +    size_t at = 0;
-+    auto order = hs->config->client_fingerprint == 3
-+        ? Span<const uint16_t>(kFirefox)
-+        : hs->config->client_fingerprint == 5
-+            ? Span<const uint16_t>(kIos) : Span<const uint16_t>(kSafari);
++    Span<const uint16_t> order;
++    switch (hs->config->client_fingerprint) {
++      case 3: order = kFirefox; break;
++      case 4: order = kSafari; break;
++      case 5: order = kIos; break;
++      case 6: order = kAndroid; break;
++      case 7: order = kEdge; break;
++      case 8: order = kThreeSixty; break;
++      case 9: order = kQq; break;
++      default: OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR); return false;
++    }
 +    for (uint16_t id : order) {
 +      bool found = false;
 +      for (size_t i = 0; i < kNumExtensions; i++) {
@@ -182,11 +199,12 @@ index db1a291..32908a7 100644
    if (!hs->config->permute_extensions) {
      return true;
    }
-@@ -4521,6 +4609,7 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+@@ -4521,6 +4609,8 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
    // images aligned.
    size_t psk_len = ext_pre_shared_key_clienthello_length(hs, type);
    if (!SSL_is_dtls(ssl) && !SSL_is_quic(ssl) &&
 +      hs->config->client_fingerprint != 2 && hs->config->client_fingerprint != 3 &&
++      hs->config->client_fingerprint != 6 && hs->config->client_fingerprint != 8 &&
        !ssl->s3->used_hello_retry_request) {
      msg_len += 2 /* length prefix */ + CBB_len(&extensions) + psk_len;
      // The length of the padding extension, excluding the four-byte extension
@@ -337,7 +355,7 @@ index 89702ea..76fce9a 100644
 +  if (!ssl || !ssl->config || ssl->server || SSL_is_dtls(ssl) || SSL_is_quic(ssl) ||
 +      ssl->s3->initial_handshake_complete ||
 +      (ssl->s3->hs != nullptr && ssl->s3->hs->max_version != 0) ||
-+      ssl->config->client_fingerprint != 0 || profile < 1 || profile > 5) {
++      ssl->config->client_fingerprint != 0 || profile < 1 || profile > 9) {
 +    OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 +    return 0;
 +  }
