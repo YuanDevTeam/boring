@@ -191,6 +191,87 @@ fn hybrid_only_client(config: &RealityClientConfig) -> Ssl {
     ssl
 }
 
+fn allowed_hybrid_client(config: &RealityClientConfig) -> Ssl {
+    let mut ctx = SslContext::builder(SslMethod::tls()).unwrap();
+    ctx.set_min_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+    ctx.set_max_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+    ctx.set_curves_list("X25519MLKEM768:X25519").unwrap();
+    let mut ssl = Ssl::new(&ctx.build()).unwrap();
+    ssl.set_hostname("reality.test").unwrap();
+    ssl.set_reality_client(&config.clone().allow_x25519mlkem768())
+        .unwrap();
+    ssl
+}
+
+#[test]
+fn allowed_hybrid_reality_keeps_one_identity_and_accepts_both_server_choices() {
+    let (server, config) = parameters();
+    let mut stream = capture(allowed_hybrid_client(&config));
+    assert_eq!(stream.connect().unwrap_err().code(), ErrorCode::WANT_READ);
+    let msg = hello(&stream.get_ref().wire);
+    assert_eq!(hello_groups(&msg).1, [(4588, 1216), (29, 32)]);
+    authenticate_hello(&server, &msg);
+    for (group, expected) in [("X25519MLKEM768", 4588), ("X25519", 29)] {
+        assert_eq!(
+            memory_handshake_with_group(allowed_hybrid_client, group, false, false, false, false)
+                .unwrap(),
+            expected
+        );
+    }
+    for (bad_hmac, bad_signature, expected) in [
+        (true, false, "CERTIFICATE_VERIFY_FAILED"),
+        (false, true, "BAD_SIGNATURE"),
+    ] {
+        let error = memory_handshake_with_group(
+            allowed_hybrid_client,
+            "X25519",
+            bad_hmac,
+            bad_signature,
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[cfg(feature = "client-fingerprint")]
+#[test]
+fn allowed_hybrid_preserves_classic_profiles_without_inventing_hybrid_shares() {
+    use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
+    for profile in [
+        ClientFingerprint::Chrome120,
+        ClientFingerprint::Firefox120,
+        ClientFingerprint::Safari16,
+        ClientFingerprint::Ios14,
+        ClientFingerprint::Edge85,
+        ClientFingerprint::Qq111,
+    ] {
+        let connector =
+            FingerprintConnector::new(SslConnector::builder(SslMethod::tls()).unwrap(), profile)
+                .unwrap();
+        let make_client = |config: &RealityClientConfig| {
+            let mut connection = connector
+                .configure_with_application_settings(b"", false)
+                .unwrap();
+            connection
+                .set_reality_client(&config.clone().allow_x25519mlkem768())
+                .unwrap();
+            connection.into_ssl("reality.test").unwrap()
+        };
+        assert_eq!(
+            memory_handshake_with_group(make_client, "X25519", false, false, false, false).unwrap(),
+            29
+        );
+        let (server, config) = parameters();
+        let mut stream = capture(make_client(&config));
+        assert_eq!(stream.connect().unwrap_err().code(), ErrorCode::WANT_READ);
+        let msg = hello(&stream.get_ref().wire);
+        assert!(!hello_groups(&msg).1.iter().any(|(group, _)| *group == 4588));
+        authenticate_hello(&server, &msg);
+    }
+}
+
 #[test]
 fn hybrid_only_reality_authenticates_with_its_own_ecdh_component() {
     let (server, config) = parameters();
