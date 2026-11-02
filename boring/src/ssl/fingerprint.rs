@@ -252,9 +252,13 @@ impl FingerprintConnector {
         profile: ClientFingerprint,
     ) -> Result<Self, ErrorStack> {
         let spec = profile.profile();
-        if spec.tls12_only {
+        if spec.tls12_only
+            && builder
+                .max_proto_version()
+                .is_none_or(|maximum| maximum.0 > SslVersion::TLS1_2.0)
+        {
             // Do not turn a historical TLS1.2 profile into a fake TLS1.3 hello.
-            // A caller's higher minimum remains enforced by the native engine.
+            // Preserve a caller's stricter maximum and leave its minimum intact.
             builder.set_max_proto_version(Some(SslVersion::TLS1_2))?;
         }
         builder.set_strict_cipher_list(spec.ciphers)?;

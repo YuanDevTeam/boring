@@ -557,6 +557,70 @@ fn android11_keeps_okhttp_order_without_adding_tls13_or_browser_extensions() {
 }
 
 #[test]
+fn tls12_profiles_preserve_stricter_caller_version_limits() {
+    for profile in [
+        ClientFingerprint::Android11,
+        ClientFingerprint::ThreeSixty75,
+    ] {
+        for maximum in [SslVersion::TLS1, SslVersion::TLS1_1] {
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            builder
+                .set_min_proto_version(Some(SslVersion::TLS1_2))
+                .unwrap();
+            builder.set_max_proto_version(Some(maximum)).unwrap();
+            let connector = FingerprintConnector::new(builder, profile).unwrap();
+            let config = connector.configure(b"").unwrap();
+            assert_eq!(config.max_proto_version(), Some(maximum), "{profile:?}");
+            let error = config
+                .connect("fingerprint.test", Capture::default())
+                .unwrap_err();
+            let boring::ssl::HandshakeError::Failure(stream) = error else {
+                panic!("a conflicting version range must fail before sending a hello");
+            };
+            assert!(stream.get_ref().0.is_empty());
+        }
+    }
+}
+
+#[test]
+fn tls12_profiles_keep_their_ceiling_without_lowering_the_callers_minimum() {
+    for profile in [
+        ClientFingerprint::Android11,
+        ClientFingerprint::ThreeSixty75,
+    ] {
+        for maximum in [None, Some(SslVersion::TLS1_2), Some(SslVersion::TLS1_3)] {
+            for minimum in [SslVersion::TLS1_2, SslVersion::TLS1_3] {
+                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+                builder.set_min_proto_version(Some(minimum)).unwrap();
+                builder.set_max_proto_version(maximum).unwrap();
+                let connector = FingerprintConnector::new(builder, profile).unwrap();
+                let mut config = connector.configure(b"").unwrap();
+                assert_eq!(config.min_proto_version(), Some(minimum), "{profile:?}");
+                assert_eq!(
+                    config.max_proto_version(),
+                    Some(SslVersion::TLS1_2),
+                    "{profile:?}"
+                );
+                let error = config
+                    .connect("fingerprint.test", Capture::default())
+                    .unwrap_err();
+                if minimum == SslVersion::TLS1_3 {
+                    let boring::ssl::HandshakeError::Failure(stream) = error else {
+                        panic!("a TLS1.3 minimum must not be lowered by the profile");
+                    };
+                    assert!(stream.get_ref().0.is_empty());
+                } else {
+                    let boring::ssl::HandshakeError::WouldBlock(stream) = error else {
+                        panic!("the TLS1.2 profile must emit its hello");
+                    };
+                    assert!(!stream.get_ref().0.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn edge85_and_qq111_preserve_reference_versions_order_and_alps_difference() {
     for (profile, alps) in [
         (ClientFingerprint::Edge85, false),
