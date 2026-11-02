@@ -33,8 +33,9 @@ use self::bridge::AsyncStreamBridge;
 pub use crate::async_callbacks::SslContextBuilderExt;
 pub use boring::ssl::{
     AsyncPrivateKeyMethod, AsyncPrivateKeyMethodError, AsyncSelectCertError, BoxGetSessionFinish,
-    BoxGetSessionFuture, BoxPrivateKeyMethodFinish, BoxPrivateKeyMethodFuture, BoxSelectCertFinish,
-    BoxSelectCertFuture, ExDataFuture,
+    BoxGetSessionFuture, BoxPrivateKeyMethodFinish, BoxPrivateKeyMethodFuture,
+    BoxSelectCertActionFinish, BoxSelectCertActionFuture, BoxSelectCertFinish, BoxSelectCertFuture,
+    ExDataFuture, SelectCertAction,
 };
 
 /// Asynchronously performs a client-side TLS handshake over the provided stream.
@@ -202,7 +203,7 @@ where
     fn poll_read(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        buf: &mut ReadBuf,
+        buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         self.run_in_context(ctx, |s| {
             // SAFETY: read_uninit does not de-initialize the buffer.
@@ -226,17 +227,17 @@ where
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        ctx: &mut Context,
+        ctx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         self.run_in_context(ctx, |s| cvt(s.write(buf)))
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.run_in_context(ctx, |s| cvt(s.flush()))
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.run_in_context(ctx, |s| s.shutdown()) {
             Ok(ShutdownResult::Sent | ShutdownResult::Received) => {}
             Err(ref e) if e.code() == ErrorCode::ZERO_RETURN => {}

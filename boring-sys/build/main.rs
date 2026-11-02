@@ -158,7 +158,7 @@ fn get_boringssl_source_path(config: &Config) -> &Path {
             println!("cargo:warning=fetching boringssl git submodule");
 
             run_command(
-                Command::new("git")
+                git_command()
                     .args(["submodule", "update", "--init", "--recursive"])
                     .arg(&submodule_path),
             )
@@ -497,12 +497,12 @@ fn ensure_patches_applied(config: &Config) -> io::Result<()> {
 
     // NOTE: init git in the copied files, so we can apply patches
     if !has_git {
-        run_command(Command::new("git").arg("init").current_dir(src_path))?;
+        run_command(git_command().arg("init").current_dir(src_path))?;
     }
 
     if config.features.allow_crl_extensions_bad_version {
         println!(
-            "cargo:warning=applying the patch for disabling cert version \
+            "cargo:warning=applying the patch for disabling CRL version \
             validation for extensions"
         );
         apply_patch(config, "bad-cert-verification.patch")?;
@@ -573,13 +573,43 @@ fn apply_patch(config: &Config, patch_name: &str) -> io::Result<()> {
     }
 
     run_command(
-        Command::new("git")
+        git_command()
             .args(&args)
             .arg(cmd_path)
             .current_dir(src_path),
     )?;
 
     Ok(())
+}
+
+/// Repository-local variables, as listed by `git rev-parse --local-env-vars`.
+///
+/// Git sets these when it runs hooks, so a build started from a hook would
+/// otherwise run `git` against the caller's repository instead of the BoringSSL sources.
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    for var in GIT_LOCAL_ENV_VARS {
+        command.env_remove(var);
+    }
+    command
 }
 
 fn run_command(command: &mut Command) -> io::Result<Output> {
@@ -815,7 +845,8 @@ fn generate_bindings(config: &Config) -> Result<PathBuf, Box<dyn std::error::Err
         .layout_tests(config.env.debug.is_some())
         .merge_extern_blocks(true)
         .prepend_enum_name(true)
-        .blocklist_type("max_align_t") // Not supported by bindgen on all targets, not used by BoringSSL
+        .allowlist_file(r".*[/\\]include[/\\]openssl[/\\].*") // Only include BoringSSL's own declarations, not transitive system headers
+        .opaque_type("FILE")
         .clang_args(get_extra_clang_args_for_bindgen(config))
         .clang_arg("-I")
         .clang_arg(include_path.display().to_string());

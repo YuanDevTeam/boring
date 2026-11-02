@@ -13,8 +13,9 @@
 //!
 //! ## BoringSSL version
 //!
-//! By default, the crate aims to statically link with the latest BoringSSL master branch.
-//! *Note*: any BoringSSL revision bumps will be released as a major version update of all crates.
+//! By default, the crate statically links against a pinned BoringSSL revision, vendored as a
+//! submodule at `boring-sys/deps/boringssl`. The current pin is upstream tag `0.20261020.0`.
+//! *Note*: any BoringSSL revision bumps will be released as a minor version update of all crates.
 //!
 //! # Compilation and linking options
 //!
@@ -26,7 +27,8 @@
 //! ## Support for pre-built binaries or custom source
 //!
 //! While this crate can build BoringSSL on its own, you may want to provide pre-built binaries instead.
-//! To do so, specify the environment variable `BORING_BSSL{,_FIPS}_PATH` with the path to the binaries.
+//! To do so, specify the environment variable `BORING_BSSL_PATH` or `BORING_BSSL_FIPS_PATH` with
+//! the path to the binaries.
 //!
 //! You can also provide specific headers by setting `BORING_BSSL{,_FIPS}_INCLUDE_PATH`.
 //!
@@ -39,11 +41,11 @@
 //! _Warning_: When providing a different version of BoringSSL make sure to use a compatible one, the
 //! crate relies on the presence of certain functions.
 //!
-//! ## Building with a FIPS-validated module
+//! ## FIPS 140-3
 //!
-//! Only BoringCrypto module version `853ca1ea1168dff08011e5d42d94609cc0ca2e27`, as certified with
-//! [FIPS 140-2 certificate 4407](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4407)
-//! is supported by this crate. Support is enabled by this crate's `fips` feature.
+//! Use the `fips` feature to enable building the BoringCrypto FIPS module in FIPS mode. The
+//! vendored BoringSSL sources are the [update stream of a validated
+//! module](https://github.com/google/boringssl/blob/main/crypto/fipsmodule/FIPS.md#update-stream).
 //!
 //! `boring-sys` comes with a test that FIPS is enabled/disabled depending on the feature flag. You can run it as follows:
 //!
@@ -75,26 +77,23 @@
 //! The crate can be compiled with [RawPublicKey](https://datatracker.ietf.org/doc/html/rfc7250)
 //! support by turning on `rpk` compilation feature.
 //!
-//! ## Experimental post-quantum cryptography
+//! ## Post-quantum cryptography
 //!
-//! The crate can be compiled with [post-quantum cryptography](https://blog.cloudflare.com/post-quantum-for-all/)
-//! support by turning on `post-quantum` compilation feature.
+//! Upstream BoringSSL now supports and enables `X25519MLKEM768`, the recommended
+//! post-quantum key agreement from RFC 10024, by default.  The `pq-experimental`
+//! feature is a no-op kept only for backwards compatibility.
 //!
-//! Upstream BoringSSL support the post-quantum hybrid key agreement `X25519Kyber768Draft00`. Most
-//! users should stick to that one for now. Enabling this feature, adds a few other post-quantum key
-//! agreements:
+//! We patch BoringSSL to additionally support these key agreements, they will be removed in the
+//! future:
 //!
-//! - `X25519MLKEM768` is the successor of `X25519Kyber768Draft00`. We expect servers to switch
-//!   before the end of 2024.
-//! - `X25519Kyber768Draft00Old` is the same as `X25519Kyber768Draft00`, but under its old codepoint.
-//! - `X25519Kyber512Draft00`. Similar to `X25519Kyber768Draft00`, but uses level 1 parameter set for
-//!   Kyber. Not recommended. It's useful to test whether the shorter ClientHello upsets fewer middle
-//!   boxes.
-//! - `P256Kyber768Draft00`. Similar again to `X25519Kyber768Draft00`, but uses P256 as classical
-//!   part. It uses a non-standard codepoint. Not recommended.
+//! - `X25519Kyber768Draft00`, under codepoint `0x6399`. This is the pre-standard predecessor of
+//!   `X25519MLKEM768`. Not recommended; it's being phased out.
+//! - `P256Kyber768Draft00`, under codepoint `0xfe32`, which uses P-256 as the classical part.
+//!   In the past we needed this for compliance reasons. Not recommended; it's being phased out.
 //!
-//! Presently all these key agreements are deployed by Cloudflare, but we do not guarantee continued
-//! support for them.
+//! Upstream BoringSSL supports ML-DSA for authentication in TLS 1.3, but only enables it for
+//! servers by default. We patch BoringSSL to enable ML-DSA for clients by default as well, and
+//! enable ML-DSA for both in the fips202205 and fips202609 compliance profiles.
 
 #[macro_use]
 extern crate bitflags;
