@@ -5,7 +5,10 @@ fork. The implemented fixed profiles are `ClientFingerprint::Chrome120` (classic
 X25519), `Chrome133` (ordinary TLS with native X25519MLKEM768 and X25519 shares,
 new ALPS and no padding), `Firefox120` (X25519/P-256 shares and fixed order) and
 `Safari16` (Safari 16.0, fixed order and Zlib) and `Ios14` (iOS 14, fixed order,
-CBC-SHA256 offers and no certificate compression). They are not aliases following a
+CBC-SHA256 offers and no certificate compression), `Android11` (Android 11
+OkHttp), `Edge85`, `ThreeSixty75` (360 Browser 7.5) and `Qq111` (QQ 11.1).
+Android11 and ThreeSixty75 cap negotiation at TLS 1.2; a caller's higher minimum
+is still enforced rather than lowered. They are not aliases following a
 browser release automatically. Unknown profile names
 must be rejected by applications; this library does not silently map them to a
 different browser.
@@ -37,6 +40,12 @@ change the returned configuration's ALPN or profile fields afterwards. SNI,
 verification and opt-in REALITY use their normal connection-level interfaces.
 Restricting TLS versions or ALPN intentionally changes the resulting wire shape.
 
+`configure_with_application_settings(alpn, false)` omits the profile's optional
+h2 ALPS declaration when the caller's HTTP/2 engine cannot consume negotiated
+application settings. It retains the requested ALPN, including h2, and does not
+discard already-negotiated settings. `configure(alpn)` remains equivalent to
+`configure_with_application_settings(alpn, true)`, preserving existing behavior.
+
 The profile configures ciphers, supported groups, signature algorithms, GREASE,
 extension permutation, SCT/OCSP, ECH GREASE and template-specific h2 ALPS. Certificate
 compression uses real Brotli for Chrome and Zlib for Safari; Firefox and iOS do not
@@ -44,6 +53,12 @@ advertise it. This is not an advertised-only extension. The
 native certificate-message allocation and decoder output are bounded to 128 KiB.
 The profile does not disable certificate verification, weaken handshake signature
 verification, enable early data or create a resumption policy.
+
+Edge85 and Qq111 preserve their fixed reference ordering; QQ declares old-codepoint
+h2 ALPS when enabled, while Edge does not. Android11 and ThreeSixty75 do not add
+GREASE or certificate compression. ThreeSixty75 exposes the implemented TLS 1.2
+subset; historical fake DHE/DSA, RC4 and disabled CBC-SHA256 suites are not made
+selectable.
 
 `SslRef::peer_application_settings()` returns borrowed negotiated ALPS data:
 `None` means absent, `Some(&[])` means negotiated with empty peer settings. TLS
@@ -71,6 +86,12 @@ separately; classic remains the default. The other fixed profiles fail rather
 than changing their wire identities. Both actual hybrid negotiation and native
 REALITY authentication are required. See the independent [hybrid fork gate](reality-hybrid.md);
 its checks do not establish VCore's production/download-leg support.
+
+`RealityClientConfig::allow_x25519mlkem768` instead preserves the profile's actual
+shares and allows either classic or hybrid selection within the same authenticated
+handshake. A classic profile remains classic; this does not invent a hybrid share
+or retry a rejected connection. Classic mode remains the default, and required
+hybrid mode keeps its existing requirement.
 
 ## Scope and verification
 
