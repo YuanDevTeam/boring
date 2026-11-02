@@ -650,6 +650,14 @@ fn three_sixty75_keeps_tls12_groups_without_enabling_fake_or_disabled_algorithms
         [0xc00a, 0xc014, 0x0035, 0xc009, 0xc013, 0x002f, 0x000a]
     );
     let ids: Vec<_> = extensions.iter().map(|(kind, _)| *kind).collect();
+    // Retain native EMS after the historical template's ordered extensions.
+    assert_eq!(ids, [0, 65281, 10, 11, 35, 16, 5, 13, 23]);
+    assert!(extensions
+        .iter()
+        .find(|(kind, _)| *kind == 23)
+        .unwrap()
+        .1
+        .is_empty());
     let groups = &extensions.iter().find(|(kind, _)| *kind == 10).unwrap().1;
     assert_eq!(codes(&groups[2..]), [23, 24, 25]);
     assert!(!ids

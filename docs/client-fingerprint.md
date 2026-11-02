@@ -59,6 +59,12 @@ h2 ALPS when enabled, while Edge does not. Android11 and ThreeSixty75 do not add
 GREASE or certificate compression. ThreeSixty75 exposes the implemented TLS 1.2
 subset; historical fake DHE/DSA, RC4 and disabled CBC-SHA256 suites are not made
 selectable.
+ThreeSixty75 also retains native TLS 1.2 Extended Master Secret (EMS, extension
+23), appended after the template's ordered extensions. The historical
+`Hello360_7_5` template omits EMS. This deliberate deviation preserves native EMS
+negotiation. The profile does not add the template's NPN or fake Channel ID
+declarations; ThreeSixty75 is a supported subset rather than an exact historical
+wire identity.
 
 `SslRef::peer_application_settings()` returns borrowed negotiated ALPS data:
 `None` means absent, `Some(&[])` means negotiated with empty peer settings. TLS
