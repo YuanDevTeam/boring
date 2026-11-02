@@ -4,7 +4,11 @@ Enable `boring/client-fingerprint` or `tokio-boring/client-fingerprint` on this
 fork. The implemented fixed profiles are `ClientFingerprint::Chrome120` (classic
 X25519), `Chrome133` (ordinary TLS with native X25519MLKEM768 and X25519 shares,
 new ALPS and no padding), `Firefox120` (X25519/P-256 shares and fixed order) and
-`Safari16` (Safari 16.0, fixed order and Zlib). They are not aliases following a
+`Safari16` (Safari 16.0, fixed order and Zlib) and `Ios14` (iOS 14, fixed order,
+CBC-SHA256 offers and no certificate compression), `Android11` (Android 11
+OkHttp), `Edge85`, `ThreeSixty75` (360 Browser 7.5) and `Qq111` (QQ 11.1).
+Android11 and ThreeSixty75 cap negotiation at TLS 1.2; a caller's higher minimum
+is still enforced rather than lowered. They are not aliases following a
 browser release automatically. Unknown profile names
 must be rejected by applications; this library does not silently map them to a
 different browser.
@@ -36,13 +40,31 @@ change the returned configuration's ALPN or profile fields afterwards. SNI,
 verification and opt-in REALITY use their normal connection-level interfaces.
 Restricting TLS versions or ALPN intentionally changes the resulting wire shape.
 
+`configure_with_application_settings(alpn, false)` omits the profile's optional
+h2 ALPS declaration when the caller's HTTP/2 engine cannot consume negotiated
+application settings. It retains the requested ALPN, including h2, and does not
+discard already-negotiated settings. `configure(alpn)` remains equivalent to
+`configure_with_application_settings(alpn, true)`, preserving existing behavior.
+
 The profile configures ciphers, supported groups, signature algorithms, GREASE,
 extension permutation, SCT/OCSP, ECH GREASE and template-specific h2 ALPS. Certificate
-compression uses real Brotli for Chrome and Zlib for Safari; Firefox does not
+compression uses real Brotli for Chrome and Zlib for Safari; Firefox and iOS do not
 advertise it. This is not an advertised-only extension. The
 native certificate-message allocation and decoder output are bounded to 128 KiB.
 The profile does not disable certificate verification, weaken handshake signature
 verification, enable early data or create a resumption policy.
+
+Edge85 and Qq111 preserve their fixed reference ordering; QQ declares old-codepoint
+h2 ALPS when enabled, while Edge does not. Android11 and ThreeSixty75 do not add
+GREASE or certificate compression. ThreeSixty75 exposes the implemented TLS 1.2
+subset; historical fake DHE/DSA, RC4 and disabled CBC-SHA256 suites are not made
+selectable.
+ThreeSixty75 also retains native TLS 1.2 Extended Master Secret (EMS, extension
+23), appended after the template's ordered extensions. The historical
+`Hello360_7_5` template omits EMS. This deliberate deviation preserves native EMS
+negotiation. The profile does not add the template's NPN or fake Channel ID
+declarations; ThreeSixty75 is a supported subset rather than an exact historical
+wire identity.
 
 `SslRef::peer_application_settings()` returns borrowed negotiated ALPS data:
 `None` means absent, `Some(&[])` means negotiated with empty peer settings. TLS
@@ -58,7 +80,7 @@ exception and native CertificateVerify checks remain in the native handshake.
 The full connection-local invariants and deliberately unsupported combinations
 are documented in [REALITY](reality-client.md).
 
-The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) cover all four
+The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) cover the four originally accepted
 profiles' classic REALITY shape and authentication binding. Classic mode removes
 Chrome133's ML-KEM group/share and preserves Firefox's additional P-256 share.
 Independent VCore/Mihomo data paths still require application integration and
@@ -66,10 +88,16 @@ fresh container acceptance; ordinary-TLS ML-KEM is not PQ REALITY.
 
 For explicit hybrid REALITY, only Chrome133 among this fixed catalog has the
 required group/share. Configure `RealityClientConfig::require_x25519mlkem768`
-separately; classic remains the default. The other three profiles fail rather
+separately; classic remains the default. The other fixed profiles fail rather
 than changing their wire identities. Both actual hybrid negotiation and native
 REALITY authentication are required. See the independent [hybrid fork gate](reality-hybrid.md);
 its checks do not establish VCore's production/download-leg support.
+
+`RealityClientConfig::allow_x25519mlkem768` instead preserves the profile's actual
+shares and allows either classic or hybrid selection within the same authenticated
+handshake. A classic profile remains classic; this does not invent a hybrid share
+or retry a rejected connection. Classic mode remains the default, and required
+hybrid mode keeps its existing requirement.
 
 ## Scope and verification
 
@@ -137,3 +165,20 @@ of this validation the fork branch was local/unpublished; the initial VCore
 dependency-resolution attempt was removed rather than leaving a sibling path
 dependency or an unresolved lockfile. Publishing this branch makes its interfaces
 available for a pinned Git dependency; VCore integration is validated separately.
+
+## iOS 14 source and cipher boundary
+
+`Ios14` is independently implemented from the wire fields in the official
+[uTLS v1.8.8 iOS14 template](https://github.com/MetaCubeX/utls/blob/v1.8.8/u_parrots.go#L1654).
+The native catalog has its own profile ID and cipher list. It offers the real
+CBC-SHA256 suites c023, c027 and 003c; the last uses existing native RSA,
+AES-128-CBC, HMAC-SHA256 and TLS1.2 PRF primitives. It remains deprecated and
+excluded from default cipher aliases. No TLS1.0/1.1 floor is restored by the profile.
+
+The reference's disabled c024, c028 and 003d, and its template-only c008, are
+wire declarations whose actual selection fails. Certificate compression is
+absent. Signature duplication, cold ticket omission, GREASE and conditional
+padding are connection-local encoding rules. Trust, identity, ALPN, TLS versions,
+transcript, key generation and Finished remain native and caller-owned.
+The uTLS source was used only as a behavior reference; no Go functions were
+copied or translated. Existing BoringSSL and Rust wrapper licenses are retained.

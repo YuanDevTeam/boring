@@ -24,10 +24,10 @@ index 055b3e02..a44ca66b 100644
 +                                           size_t short_id_len,
 +                                           const uint8_t client_version[3]);
 +
-+// SSL_set1_reality_client_ex additionally accepts a strict hybrid-mode flag
-+// (zero or one). When one, configured X25519MLKEM768 groups/shares are kept
-+// and required. A peer selecting a different group fails closed. Existing
-+// classic behavior is preserved by SSL_set1_reality_client and flag zero.
++// SSL_set1_reality_client_ex accepts modes zero (classic), one (required
++// hybrid), or two (allow hybrid). Mode one requires the actual hybrid share
++// and server selection; mode two preserves valid declared shares and accepts
++// either selection without retry or PKI fallback. Zero retains classic mode.
 +OPENSSL_EXPORT int SSL_set1_reality_client_ex(
 +    SSL *ssl, const uint8_t server_public_key[32], const uint8_t *short_id,
 +    size_t short_id_len, const uint8_t client_version[3],
@@ -67,13 +67,14 @@ index 2bea8f62..06a280fa 100644
    InplaceVector<uint8_t, SSL_MAX_MD_SIZE> secret;
    InplaceVector<uint8_t, SSL_MAX_MD_SIZE> early_traffic_secret;
    InplaceVector<uint8_t, SSL_MAX_MD_SIZE> client_handshake_secret;
-@@ -3356,6 +3369,14 @@ struct SSL_CONFIG {
+@@ -3356,6 +3369,15 @@ struct SSL_CONFIG {
    // ssl is a non-owning pointer to the parent |SSL| object.
    SSL *const ssl = nullptr;
  
 +  struct RealityClient {
 +    uint8_t server_public_key[32] = {};
 +    uint8_t short_id[8] = {};
++    bool allow_x25519mlkem768 = false;
 +    uint8_t client_version[3] = {};
 +    bool require_x25519mlkem768 = false;
 +  };
@@ -129,7 +130,7 @@ diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
 index 89702eaa..90f05614 100644
 --- a/ssl/ssl_lib.cc
 +++ b/ssl/ssl_lib.cc
-@@ -2082,6 +2082,102 @@ int SSL_set1_client_key_shares(SSL *ssl, const uint16_t *group_ids,
+@@ -2082,6 +2082,111 @@ int SSL_set1_client_key_shares(SSL *ssl, const uint16_t *group_ids,
    return 1;
  }
  
@@ -145,7 +146,7 @@ index 89702eaa..90f05614 100644
 +                               const uint8_t client_version[3],
 +                               int require_x25519mlkem768) {
 +  if (!ssl || !ssl->config || !server_public_key || !client_version ||
-+      (require_x25519mlkem768 != 0 && require_x25519mlkem768 != 1) ||
++      (require_x25519mlkem768 < 0 || require_x25519mlkem768 > 2) ||
 +      short_id_len > 8 || (short_id_len != 0 && !short_id) || ssl->server ||
 +      SSL_is_dtls(ssl) || SSL_is_quic(ssl) || ssl->session ||
 +      ssl->enable_early_data || ssl->s3->initial_handshake_complete ||
@@ -155,8 +156,10 @@ index 89702eaa..90f05614 100644
 +    OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 +    return 0;
 +  }
-+  // Match classic Mihomo: remove modern ML-KEM from both declarations and
-+  // shares, but preserve each profile's other classic shares and their order.
++  const bool allow_hybrid = require_x25519mlkem768 != 0;
++  const bool require_hybrid = require_x25519mlkem768 == 1;
++  // Classic removes ML-KEM. Allow mode preserves only the profile's actual
++  // groups/shares; required mode additionally enforces a hybrid server choice.
 +  // Build replacements before mutating the connection; no profile dependency.
 +  Array<uint16_t> groups;
 +  Array<uint32_t> flags;
@@ -172,7 +175,7 @@ index 89702eaa..90f05614 100644
 +                  SSL_GROUP_FLAG_EQUAL_PREFERENCE_WITH_NEXT) == 0) {
 +      rank++;
 +    }
-+    if (require_x25519mlkem768 || groups[i] != SSL_GROUP_X25519_MLKEM768) {
++    if (allow_hybrid || groups[i] != SSL_GROUP_X25519_MLKEM768) {
 +      groups[count] = groups[i];
 +      flags[count] = ssl->config->supported_group_list_flags[i] &
 +                     ~SSL_GROUP_FLAG_EQUAL_PREFERENCE_WITH_NEXT;
@@ -188,28 +191,34 @@ index 89702eaa..90f05614 100644
 +  InplaceVector<uint16_t, kNumNamedGroups> shares;
 +  if (ssl->config->client_key_share_selections) {
 +    for (uint16_t group : *ssl->config->client_key_share_selections) {
-+      if ((require_x25519mlkem768 || group != SSL_GROUP_X25519_MLKEM768) &&
++      if ((allow_hybrid || group != SSL_GROUP_X25519_MLKEM768) &&
 +          !shares.TryPushBack(group)) {
 +        return 0;
 +      }
 +    }
-+  } else if (!shares.TryPushBack(require_x25519mlkem768
-+                                     ? SSL_GROUP_X25519_MLKEM768
-+                                     : SSL_GROUP_X25519)) {
-+    return 0;
++  } else {
++    for (uint16_t group : groups) {
++      if ((group == SSL_GROUP_X25519 && !require_hybrid) ||
++          (group == SSL_GROUP_X25519_MLKEM768 && allow_hybrid)) {
++        if (!shares.TryPushBack(group)) {
++          return 0;
++        }
++      }
++    }
 +  }
-+  const uint16_t required_group = require_x25519mlkem768
-+                                      ? SSL_GROUP_X25519_MLKEM768
-+                                      : SSL_GROUP_X25519;
-+  if (std::find(shares.begin(), shares.end(), required_group) == shares.end() ||
-+      !validate_key_shares(shares, groups)) {
++  const bool has_classic = std::find(shares.begin(), shares.end(),
++                                    SSL_GROUP_X25519) != shares.end();
++  const bool has_hybrid = std::find(shares.begin(), shares.end(),
++                                   SSL_GROUP_X25519_MLKEM768) != shares.end();
++  if ((!has_classic && !(allow_hybrid && has_hybrid)) ||
++      (require_hybrid && !has_hybrid) || !validate_key_shares(shares, groups)) {
 +    OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 +    return 0;
 +  }
 +  for (uint16_t group : shares) {
 +    if (group != SSL_GROUP_X25519 && group != SSL_GROUP_SECP256R1 &&
 +        group != SSL_GROUP_SECP384R1 && group != SSL_GROUP_SECP521R1 &&
-+        !(require_x25519mlkem768 && group == SSL_GROUP_X25519_MLKEM768)) {
++        !(allow_hybrid && group == SSL_GROUP_X25519_MLKEM768)) {
 +      OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 +      return 0;
 +    }
@@ -220,7 +229,8 @@ index 89702eaa..90f05614 100644
 +  ssl->config->client_key_share_selections->CopyFrom(shares);
 +  ssl->config->reality_client.emplace();
 +  auto &reality = *ssl->config->reality_client;
-+  reality.require_x25519mlkem768 = require_x25519mlkem768 != 0;
++  reality.allow_x25519mlkem768 = allow_hybrid;
++  reality.require_x25519mlkem768 = require_hybrid;
 +  OPENSSL_memcpy(reality.server_public_key, server_public_key, 32);
 +  OPENSSL_memcpy(reality.client_version, client_version, 3);
 +  if (short_id_len != 0) {
@@ -270,7 +280,7 @@ index 7ab6d2c5..f7036fd8 100644
 +    if (group == SSL_GROUP_X25519 && auth_share == nullptr) {
 +      auth_share = share.get();
 +    } else if (group == SSL_GROUP_X25519_MLKEM768 && !hybrid_share &&
-+               hs->config->reality_client->require_x25519mlkem768) {
++               hs->config->reality_client->allow_x25519mlkem768) {
 +      hybrid_share = share.get();
 +    } else if (group != SSL_GROUP_SECP256R1 && group != SSL_GROUP_SECP384R1 &&
 +               group != SSL_GROUP_SECP521R1) {

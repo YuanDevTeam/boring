@@ -38,7 +38,7 @@ advertise TLS 1.2 to match a browser, but negotiation below TLS 1.3 fails closed
 Actual ECH, QUIC, DTLS, HRR, resumption, early data and server mode are rejected.
 ECH GREASE is distinct and remains usable. FIPS, RPK and external
 precompiled/native-source combinations are outside this slice. Classic mode
-continues to reject hybrid shares; the explicit hybrid mode below is separate.
+continues to reject hybrid shares; the explicit hybrid modes below are separate.
 
 The opt-in [named ClientHello profile](client-fingerprint.md) can be combined
 with this interface. Authentication still owns the same native key share and
@@ -77,10 +77,22 @@ post-quantum authentication or VLESS Encryption. No ephemeral private key is
 exported. Both hybrid key components are cleansed when their native owner drops.
 Late caller changes cannot remove the hybrid requirement or its authentication.
 The existing certificate HMAC, native CertificateVerify, one-use state, and
-failure/no-fallback invariants apply to both modes.
+failure/no-fallback invariants apply to all modes.
 
-The C interface adds `SSL_set1_reality_client_ex` with a flag accepting only zero
-or one. The original `SSL_set1_reality_client` retains classic semantics.
+### Optional hybrid negotiation
+
+`RealityClientConfig::allow_x25519mlkem768()` preserves the selected profile's
+real authentication shares. A profile offering both X25519MLKEM768 and X25519 may
+accept either server choice within the same handshake; a classic-only profile
+remains classic. Without an explicit share list, this mode selects authentication
+shares from the configured supported groups. It does not invent shares, change
+profiles, retry a handshake or relax
+REALITY authentication. The caller must opt in; classic remains the default and
+`require_x25519mlkem768()` still rejects classic selection.
+
+The C interface adds `SSL_set1_reality_client_ex` with modes `0` (classic),
+`1` (require hybrid) and `2` (allow classic or hybrid). Other values are rejected.
+The original `SSL_set1_reality_client` retains classic semantics.
 [Hybrid fork acceptance](reality-hybrid.md) records the new tests independently
 from the historical classic results below.
 

@@ -623,6 +623,7 @@ enum ServerHelloFault {
     ShareLength,
     FfdheSelection,
     FakeCipher,
+    DisabledIosCipher(u16),
     Extension(u16),
 }
 
@@ -713,6 +714,9 @@ async fn reject_server_hello(
                 match fault {
                     ServerHelloFault::FakeCipher => {
                         hello[cipher_at..cipher_at + 2].copy_from_slice(&0xc008u16.to_be_bytes());
+                    }
+                    ServerHelloFault::DisabledIosCipher(id) => {
+                        hello[cipher_at..cipher_at + 2].copy_from_slice(&id.to_be_bytes());
                     }
                     ServerHelloFault::Extension(kind) => {
                         let old_size =
@@ -811,4 +815,39 @@ async fn safari16_rejects_utls_fake_cipher_selection() {
         "WRONG_CIPHER_RETURNED",
     )
     .await;
+}
+
+#[tokio::test]
+async fn ios14_negotiates_real_cbc_sha256_suites() {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        for cipher in [
+            "ECDHE-ECDSA-AES128-SHA256",
+            "ECDHE-RSA-AES128-SHA256",
+            "AES128-SHA256",
+        ] {
+            exchange_profile(
+                ClientFingerprint::Ios14,
+                SslVersion::TLS1_2,
+                "X25519",
+                Some(cipher),
+            )
+            .await;
+        }
+        exchange_profile(ClientFingerprint::Ios14, SslVersion::TLS1_3, "X25519", None).await;
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn ios14_rejects_declared_disabled_cipher_selection() {
+    for cipher in [0xc008, 0xc024, 0xc028, 0x003d] {
+        reject_server_hello(
+            ClientFingerprint::Ios14,
+            SslVersion::TLS1_2,
+            ServerHelloFault::DisabledIosCipher(cipher),
+            "WRONG_CIPHER_RETURNED",
+        )
+        .await;
+    }
 }

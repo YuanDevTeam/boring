@@ -17,7 +17,15 @@ pub struct RealityClientConfig {
     server_public_key: [u8; 32],
     short_id: [u8; 8],
     client_version: [u8; 3],
-    require_x25519mlkem768: bool,
+    hybrid_mode: HybridMode,
+}
+
+#[derive(Clone, Copy)]
+#[repr(i32)]
+enum HybridMode {
+    Classic = 0,
+    Require = 1,
+    Allow = 2,
 }
 
 impl RealityClientConfig {
@@ -41,7 +49,7 @@ impl RealityClientConfig {
             server_public_key,
             short_id: padded,
             client_version,
-            require_x25519mlkem768: false,
+            hybrid_mode: HybridMode::Classic,
         })
     }
 
@@ -53,7 +61,19 @@ impl RealityClientConfig {
     /// this does not silently replace the selected ClientHello profile.
     #[must_use]
     pub fn require_x25519mlkem768(mut self) -> Self {
-        self.require_x25519mlkem768 = true;
+        self.hybrid_mode = HybridMode::Require;
+        self
+    }
+
+    /// Preserves real hybrid shares without requiring a hybrid server choice.
+    ///
+    /// A configured classic profile remains classic. Profiles that offer both
+    /// X25519MLKEM768 and X25519 may negotiate either in this same handshake;
+    /// certificate authentication, TLS1.3 and all other REALITY checks remain
+    /// mandatory. This does not retry or replace the selected profile.
+    #[must_use]
+    pub fn allow_x25519mlkem768(mut self) -> Self {
+        self.hybrid_mode = HybridMode::Allow;
         self
     }
 }
@@ -66,7 +86,9 @@ impl SslRef {
     /// and requires X25519 for authentication. Without explicit shares it selects
     /// X25519 alone. An explicitly required hybrid config instead requires
     /// X25519MLKEM768 in both the offered shares and the negotiated connection.
-    /// With no explicit shares it selects that hybrid group alone. When a
+    /// With no explicit shares it selects that hybrid group alone. Allow mode
+    /// preserves either real authentication share, including both when declared,
+    /// and accepts either negotiated group. When a
     /// standalone X25519 share exists, it authenticates REALITY; otherwise its
     /// key is the hybrid share's X25519 component, matching Mihomo's preference.
     /// Configure SNI separately. Negotiating TLS < 1.3, HRR, actual ECH, QUIC,
@@ -84,7 +106,7 @@ impl SslRef {
                 config.short_id.as_ptr(),
                 config.short_id.len(),
                 config.client_version.as_ptr(),
-                i32::from(config.require_x25519mlkem768),
+                config.hybrid_mode as i32,
             ))
         }
     }
