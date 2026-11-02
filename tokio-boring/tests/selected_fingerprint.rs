@@ -10,8 +10,12 @@ use boring::{
     x509::X509,
 };
 use foreign_types::ForeignTypeRef;
-use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{
+    pin::Pin,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 struct ForgedSignature;
 impl boring::ssl::PrivateKeyMethod for ForgedSignature {
@@ -526,20 +530,150 @@ async fn chrome133_negotiates_only_new_alps_with_absent_empty_and_nonempty_resul
 
 #[tokio::test]
 async fn chrome133_real_ticket_resumption_and_rejected_ticket_full_handshake() {
+    profile_ticket_resumption(ClientFingerprint::Chrome133, "X25519MLKEM768").await;
+}
+
+#[tokio::test]
+async fn chrome120_padding_preserves_real_ticket_resumption_and_rejection() {
+    profile_ticket_resumption(ClientFingerprint::Chrome120, "X25519").await;
+}
+
+#[derive(Debug)]
+struct ClientHelloIo {
+    inner: tokio::io::DuplexStream,
+    hello: Vec<u8>,
+    reading: bool,
+}
+
+impl AsyncRead for ClientHelloIo {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.reading = true;
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ClientHelloIo {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let result = Pin::new(&mut self.inner).poll_write(cx, bytes);
+        if let (false, Poll::Ready(Ok(written))) = (self.reading, &result) {
+            assert!(self.hello.len() + written <= 65_536);
+            self.hello.extend_from_slice(&bytes[..*written]);
+        }
+        result
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+fn assert_padded_psk_hello(mut records: &[u8]) {
+    fn take<'a>(bytes: &mut &'a [u8], len: usize) -> &'a [u8] {
+        let (taken, rest) = bytes.split_at(len);
+        *bytes = rest;
+        taken
+    }
+
+    fn vector<'a>(bytes: &mut &'a [u8], width: usize) -> &'a [u8] {
+        let len = take(bytes, width)
+            .iter()
+            .fold(0usize, |len, byte| len * 256 + usize::from(*byte));
+        take(bytes, len)
+    }
+
+    let mut hello = Vec::new();
+    while !records.is_empty() {
+        assert_eq!(take(&mut records, 1), [22]);
+        take(&mut records, 2);
+        hello.extend_from_slice(vector(&mut records, 2));
+    }
+    let mut message = hello.as_slice();
+    assert_eq!(take(&mut message, 1), [1]);
+    let mut body = vector(&mut message, 3);
+    assert!(message.is_empty());
+    take(&mut body, 34);
+    vector(&mut body, 1);
+    vector(&mut body, 2);
+    vector(&mut body, 1);
+    let mut extensions = vector(&mut body, 2);
+    assert!(body.is_empty());
+    let mut padding = None;
+    let mut last = None;
+    while !extensions.is_empty() {
+        let kind = u16::from_be_bytes(take(&mut extensions, 2).try_into().unwrap());
+        let payload = vector(&mut extensions, 2);
+        if kind == 21 {
+            assert!(padding.replace(payload.len()).is_none());
+            assert!(payload.iter().all(|byte| *byte == 0));
+        }
+        if kind == 41 {
+            assert!(!payload.is_empty());
+        }
+        last = Some(kind);
+    }
+    assert_eq!(last, Some(41), "the real PSK extension must remain last");
+    let padding = padding.expect("a PSK-bearing hello in the padding range must be padded");
+    let unpadded = hello.len() - 4 - padding;
+    assert!(
+        (256..=507).contains(&unpadded),
+        "unpadded length {unpadded}"
+    );
+    assert_eq!(hello.len(), 512);
+    assert_eq!(padding, 512 - unpadded - 4);
+}
+
+async fn profile_ticket_resumption(profile: ClientFingerprint, group: &'static str) {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let check_padding = profile == ClientFingerprint::Chrome120;
         let tickets: Arc<Mutex<Vec<SslSession>>> = Arc::default();
         let saved = tickets.clone();
         let mut b = SslConnector::builder(SslMethod::tls()).unwrap();
         b.set_session_cache_mode(SslSessionCacheMode::CLIENT | SslSessionCacheMode::NO_INTERNAL);
         b.set_new_session_callback(move |_, s| saved.lock().unwrap().push(s));
         b.set_custom_verify_callback(SslVerifyMode::PEER, |_| Ok(()));
-        let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome133).unwrap();
-        let mut acceptor = server(SslVersion::TLS1_3, "X25519MLKEM768").build();
+        if check_padding {
+            b.set_min_proto_version(Some(SslVersion::TLS1_3)).unwrap();
+        }
+        let connector = FingerprintConnector::new(b, profile).unwrap();
+        let make_acceptor = || {
+            let builder = server(SslVersion::TLS1_3, group);
+            if check_padding {
+                // SAFETY: the live builder exclusively owns this context and
+                // the native API copies the single cipher ID. SHA256 keeps the
+                // genuine ticket and binder sizes deterministic for padding.
+                let cipher = [0x1301u16];
+                assert_eq!(
+                    unsafe {
+                        boring_sys::SSL_CTX_set1_tls13_ciphers(
+                            builder.as_ptr(),
+                            cipher.as_ptr(),
+                            std::ptr::null(),
+                            cipher.len(),
+                        )
+                    },
+                    1
+                );
+            }
+            builder.build()
+        };
+        let mut acceptor = make_acceptor();
         for (round, expected_reuse) in [(0, false), (1, true), (2, false)] {
             // A distinct real ticket key rejects the offered previous ticket,
             // then performs a fresh authenticated handshake rather than failing.
             if round == 2 {
-                acceptor = server(SslVersion::TLS1_3, "X25519MLKEM768").build();
+                acceptor = make_acceptor();
             }
             let peer = acceptor.clone();
             let (io, remote) = tokio::io::duplex(4096);
@@ -553,6 +687,9 @@ async fn chrome133_real_ticket_resumption_and_rejected_ticket_full_handshake() {
             });
             let mut config = connector.configure(b"\x02h2").unwrap();
             config.set_verify_hostname(false);
+            if check_padding {
+                config.set_enable_ech_grease(false);
+            }
             if round != 0 {
                 let ticket = tickets.lock().unwrap().pop().expect("real server ticket");
                 // All three connections have the same identity and trust policy.
@@ -560,10 +697,18 @@ async fn chrome133_real_ticket_resumption_and_rejected_ticket_full_handshake() {
                     config.set_session(&ticket).unwrap();
                 }
             }
+            let io = ClientHelloIo {
+                inner: io,
+                hello: Vec::new(),
+                reading: false,
+            };
             let mut tls = tokio_boring::connect(config, "profile.test", io)
                 .await
                 .unwrap();
             assert_eq!(tls.ssl().session_reused(), expected_reuse);
+            if check_padding && round != 0 {
+                assert_padded_psk_hello(&tls.get_ref().hello);
+            }
             let mut response = [0; 12];
             tls.read_exact(&mut response).await.unwrap();
             assert_eq!(&response, b"ticket-ready");
