@@ -526,6 +526,15 @@ async fn chrome133_negotiates_only_new_alps_with_absent_empty_and_nonempty_resul
 
 #[tokio::test]
 async fn chrome133_real_ticket_resumption_and_rejected_ticket_full_handshake() {
+    profile_ticket_resumption(ClientFingerprint::Chrome133, "X25519MLKEM768").await;
+}
+
+#[tokio::test]
+async fn chrome120_padding_preserves_real_ticket_resumption_and_rejection() {
+    profile_ticket_resumption(ClientFingerprint::Chrome120, "X25519").await;
+}
+
+async fn profile_ticket_resumption(profile: ClientFingerprint, group: &'static str) {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let tickets: Arc<Mutex<Vec<SslSession>>> = Arc::default();
         let saved = tickets.clone();
@@ -533,13 +542,13 @@ async fn chrome133_real_ticket_resumption_and_rejected_ticket_full_handshake() {
         b.set_session_cache_mode(SslSessionCacheMode::CLIENT | SslSessionCacheMode::NO_INTERNAL);
         b.set_new_session_callback(move |_, s| saved.lock().unwrap().push(s));
         b.set_custom_verify_callback(SslVerifyMode::PEER, |_| Ok(()));
-        let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome133).unwrap();
-        let mut acceptor = server(SslVersion::TLS1_3, "X25519MLKEM768").build();
+        let connector = FingerprintConnector::new(b, profile).unwrap();
+        let mut acceptor = server(SslVersion::TLS1_3, group).build();
         for (round, expected_reuse) in [(0, false), (1, true), (2, false)] {
             // A distinct real ticket key rejects the offered previous ticket,
             // then performs a fresh authenticated handshake rather than failing.
             if round == 2 {
-                acceptor = server(SslVersion::TLS1_3, "X25519MLKEM768").build();
+                acceptor = server(SslVersion::TLS1_3, group).build();
             }
             let peer = acceptor.clone();
             let (io, remote) = tokio::io::duplex(4096);

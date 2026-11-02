@@ -1,5 +1,9 @@
 # Named ClientHello profiles
 
+The fork follows boring 5.4.0 and the official BoringSSL 0.20261020.0 baseline
+(`d3bf4795ad5b79d646cddf2fec687da5b9b502db`). Native extensions remain opt-in
+build patches; the checked-out BoringSSL submodule contains upstream source.
+
 Enable `boring/client-fingerprint` or `tokio-boring/client-fingerprint` on this
 fork. The implemented fixed profiles are `ClientFingerprint::Chrome120` (classic
 X25519), `Chrome133` (ordinary TLS with native X25519MLKEM768 and X25519 shares,

@@ -1,7 +1,7 @@
 diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
 --- a/include/openssl/ssl.h
 +++ b/include/openssl/ssl.h
-@@ -2771,6 +2771,14 @@
+@@ -2920,6 +2920,14 @@
  // early data, actual ECH, REALITY, DTLS, QUIC and server mode are rejected.
  OPENSSL_EXPORT int SSL_set1_shadow_tls_v3_client(
      SSL *ssl, const uint8_t *password, size_t password_len);
@@ -14,12 +14,12 @@ diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
 +    SSL *ssl, const uint8_t *username, size_t username_len,
 +    const uint8_t *password, size_t password_len);
  
- // SSL_set1_server_supported_groups_hint, when |ssl| is a client, indicates that
- // the server is likely to support groups listed in |server_groups|, in order of
+ // SSL_set1_server_supported_groups_hint, when `ssl` is a client, indicates that
+ // the server is likely to support groups listed in `server_groups`, in order of
 diff --git a/ssl/internal.h b/ssl/internal.h
 --- a/ssl/internal.h
 +++ b/ssl/internal.h
-@@ -1805,6 +1805,8 @@
+@@ -1802,6 +1802,8 @@
    bool reality_auth_pending = false;
    bool reality_hello_sealed = false;
    bool shadow_tls_v3_hello_sealed = false;
@@ -28,7 +28,7 @@ diff --git a/ssl/internal.h b/ssl/internal.h
    bool reality_authenticated = false;
    void ClearRealityAuth();
  
-@@ -2320,6 +2322,7 @@
+@@ -2309,6 +2311,7 @@
  // ssl_add_client_hello constructs a ClientHello and adds it to the outgoing
  // flight. It returns true on success and false on error.
  bool ssl_add_client_hello(SSL_HANDSHAKE *hs);
@@ -36,7 +36,7 @@ diff --git a/ssl/internal.h b/ssl/internal.h
  
  struct ParsedServerHello {
    CBS raw;
-@@ -3390,6 +3393,19 @@
+@@ -3440,6 +3443,19 @@
    };
    std::optional<ShadowTlsV3> shadow_tls_v3;
  
@@ -54,12 +54,12 @@ diff --git a/ssl/internal.h b/ssl/internal.h
 +  std::optional<JlsClient> jls_client;
 +
    // conf_max_version is the maximum acceptable version configured by
-   // |SSL_set_max_proto_version|. Note this version is not normalized in DTLS
-   // and is further constrained by |SSL_OP_NO_*|.
+   // `SSL_set_max_proto_version`. Note this version is not normalized in DTLS
+   // and is further constrained by `SSL_OP_NO_*`.
 diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
 --- a/ssl/ssl_lib.cc
 +++ b/ssl/ssl_lib.cc
-@@ -738,6 +738,15 @@
+@@ -735,6 +735,15 @@
  
    bool early_return = false;
    int ret = ssl_run_handshake(hs, &early_return);
@@ -73,15 +73,16 @@ diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
 +    }
 +  }
    ssl_do_info_callback(
-       ssl, ssl->server ? SSL_CB_ACCEPT_EXIT : SSL_CB_CONNECT_EXIT, ret);
-   if (ret <= 0) {
-@@ -2085,6 +2094,30 @@
+       ssl_impl, ssl_impl->server ? SSL_CB_ACCEPT_EXIT : SSL_CB_CONNECT_EXIT,
+       ret);
+@@ -2195,6 +2204,31 @@
    return 1;
  }
  
-+int SSL_set1_jls_client(SSL *ssl, const uint8_t *username,
++int SSL_set1_jls_client(SSL *ssl_arg, const uint8_t *username,
 +                        size_t username_len, const uint8_t *password,
 +                        size_t password_len) {
++  auto *ssl = FromOpaque(ssl_arg);
 +  if (!ssl || !ssl->config || !username || username_len == 0 ||
 +      username_len > 65535 || !password || password_len == 0 ||
 +      password_len > 65535 || ssl->server || SSL_is_dtls(ssl) ||
@@ -103,10 +104,10 @@ diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
 +  return 1;
 +}
 +
- int SSL_set1_shadow_tls_v3_client(SSL *ssl, const uint8_t *password,
+ int SSL_set1_shadow_tls_v3_client(SSL *ssl_arg, const uint8_t *password,
                                  size_t password_len) {
-   if (!ssl || !ssl->config || !password || password_len == 0 ||
-@@ -2093,6 +2126,7 @@
+   auto *ssl = FromOpaque(ssl_arg);
+@@ -2204,6 +2238,7 @@
        ssl->s3->initial_handshake_complete ||
        (ssl->s3->hs && ssl->s3->hs->max_version != 0) ||
        ssl->config->reality_client || ssl->config->shadow_tls_v3 ||
@@ -114,12 +115,12 @@ diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
        !ssl->config->client_ech_config_list.empty()) {
      OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
      return 0;
-@@ -2123,6 +2157,7 @@
-       ssl->enable_early_data || ssl->s3->initial_handshake_complete ||
-       (ssl->s3->hs && ssl->s3->hs->max_version != 0) ||
-       ssl->config->reality_client || ssl->config->shadow_tls_v3 ||
-+      ssl->config->jls_client ||
-       !ssl->config->client_ech_config_list.empty()) {
+@@ -2235,6 +2270,7 @@
+       ssl_impl->enable_early_data || ssl_impl->s3->initial_handshake_complete ||
+       (ssl_impl->s3->hs && ssl_impl->s3->hs->max_version != 0) ||
+       ssl_impl->config->reality_client || ssl_impl->config->shadow_tls_v3 ||
++      ssl_impl->config->jls_client ||
+       !ssl_impl->config->client_ech_config_list.empty()) {
      OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
      return 0;
 diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
@@ -133,7 +134,7 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
  #include <openssl/sha2.h>
  
  #include "../crypto/bytestring/internal.h"
-@@ -305,6 +306,110 @@
+@@ -270,6 +271,110 @@
    return true;
  }
  
@@ -244,10 +245,10 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
  static bool seal_shadow_tls_v3_client_hello(SSL_HANDSHAKE *hs,
                                             Span<uint8_t> msg) {
    if (!hs->config->shadow_tls_v3 || hs->shadow_tls_v3_hello_sealed) {
-@@ -340,6 +445,16 @@
+@@ -305,6 +410,16 @@
  
  bool ssl_add_client_hello(SSL_HANDSHAKE *hs) {
-   SSL *const ssl = hs->ssl;
+   SSLImpl *const ssl = hs->ssl;
 +  if (hs->config->jls_client &&
 +      (SSL_is_dtls(ssl) || SSL_is_quic(ssl) || ssl->server || ssl->session ||
 +       ssl->enable_early_data || ssl->s3->initial_handshake_complete ||
@@ -261,7 +262,7 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
    if (hs->config->shadow_tls_v3) {
      if (SSL_is_dtls(ssl) || SSL_is_quic(ssl) || ssl->server ||
          ssl->session || ssl->enable_early_data ||
-@@ -374,7 +489,8 @@
+@@ -339,7 +454,8 @@
    }
  
    if (!seal_reality_client_hello(hs, Span(msg.data(), msg.size())) ||
@@ -271,7 +272,7 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
      return false;
    }
    return ssl->method->add_message(ssl, std::move(msg));
-@@ -824,7 +940,8 @@
+@@ -789,7 +905,8 @@
  
    // If this client only accepts non-certificate modes, then the server must
    // support TLS 1.3.
@@ -284,7 +285,7 @@ diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
 diff --git a/ssl/tls13_client.cc b/ssl/tls13_client.cc
 --- a/ssl/tls13_client.cc
 +++ b/ssl/tls13_client.cc
-@@ -221,7 +221,7 @@
+@@ -218,7 +218,7 @@
    hs->new_cipher = cipher;
  
    const bool is_hrr = is_hello_retry_request(server_hello);
@@ -293,7 +294,7 @@ diff --git a/ssl/tls13_client.cc b/ssl/tls13_client.cc
      OPENSSL_PUT_ERROR(SSL, SSL_R_UNEXPECTED_MESSAGE);
      ssl_send_alert(ssl, SSL3_AL_FATAL, SSL_AD_UNEXPECTED_MESSAGE);
      return ssl_hs_error;
-@@ -485,6 +485,11 @@
+@@ -482,6 +482,11 @@
                     SSL3_RANDOM_SIZE);
    }
  
@@ -308,10 +309,10 @@ diff --git a/ssl/tls13_client.cc b/ssl/tls13_client.cc
 diff --git a/ssl/handshake.cc b/ssl/handshake.cc
 --- a/ssl/handshake.cc
 +++ b/ssl/handshake.cc
-@@ -333,6 +333,23 @@
+@@ -331,6 +331,23 @@
  
  enum ssl_verify_result_t ssl_verify_peer_cert(SSL_HANDSHAKE *hs) {
-   SSL *const ssl = hs->ssl;
+   SSLImpl *const ssl = hs->ssl;
 +  if (hs->config->jls_client) {
 +    // JLS authenticates identity through the ServerHello random. The native
 +    // parser, CertificateVerify and Finished still prove the peer's TLS key.
@@ -332,7 +333,7 @@ diff --git a/ssl/handshake.cc b/ssl/handshake.cc
    if (hs->config->reality_client) {
      if (!verify_reality_certificate(hs)) {
        hs->new_session->verify_result = X509_V_ERR_APPLICATION_VERIFICATION;
-@@ -760,7 +777,8 @@
+@@ -743,7 +760,8 @@
      }
  
      // Run the state machine again.
@@ -345,7 +346,7 @@ diff --git a/ssl/handshake.cc b/ssl/handshake.cc
 diff --git a/ssl/ssl_test.cc b/ssl/ssl_test.cc
 --- a/ssl/ssl_test.cc
 +++ b/ssl/ssl_test.cc
-@@ -2082,6 +2082,174 @@
+@@ -2026,6 +2026,175 @@
    return true;
  }
  
@@ -381,9 +382,10 @@ diff --git a/ssl/ssl_test.cc b/ssl/ssl_test.cc
 +}
 +
 +static void ExpectJlsCredentials(const SSL *ssl, bool retained) {
-+  ASSERT_TRUE(ssl->config);
-+  ASSERT_TRUE(ssl->config->jls_client);
-+  const auto &state = *ssl->config->jls_client;
++  const auto *ssl_impl = FromOpaque(ssl);
++  ASSERT_TRUE(ssl_impl->config);
++  ASSERT_TRUE(ssl_impl->config->jls_client);
++  const auto &state = *ssl_impl->config->jls_client;
 +  EXPECT_EQ(state.username.size(), retained ? sizeof(kJlsTestUser) - 1 : 0);
 +  EXPECT_EQ(state.password.size(), retained ? sizeof(kJlsTestPassword) - 1 : 0);
 +}
