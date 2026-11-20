@@ -1550,17 +1550,15 @@ impl SslContextBuilder {
         unsafe { cvt(ffi::SSL_CTX_use_PrivateKey(self.as_ptr(), key.as_ptr())) }
     }
 
-    /// Sets the list of supported ciphers for protocols before TLSv1.3, ignoring meaningless entries.
+    /// Configures the cipher suites used by TLS 1.2 and earlier.
     ///
-    /// See [`SslContextBuilder::set_strict_cipher_list()`].
+    /// Unrecognized entries are ignored, but an empty resulting list is an error.
+    /// Prefer [`Self::set_strict_cipher_list`] to catch unrecognized entries.
+    /// This method does not affect TLS 1.3 cipher suites.
     ///
-    /// The `set_ciphersuites` method controls the cipher suites for TLSv1.3 in OpenSSL.
-    /// BoringSSL doesn't implement `set_ciphersuites`.
-    /// See [ssl.h](https://github.com/google/boringssl/blob/master/include/openssl/ssl.h#L1542-L1544).
+    /// See BoringSSL's [cipher suite configuration] for the list syntax.
     ///
-    /// See [`ciphers`] for details on the format.
-    ///
-    /// [`ciphers`]: https://www.openssl.org/docs/manmaster/apps/ciphers.html
+    /// [cipher suite configuration]: https://commondatastorage.googleapis.com/chromium-boringssl-docs/ssl.h.html#Cipher-suite-configuration
     #[corresponds(SSL_CTX_set_cipher_list)]
     pub fn set_cipher_list(&mut self, cipher_list: &str) -> Result<(), ErrorStack> {
         let cipher_list = CString::new(cipher_list).map_err(ErrorStack::internal_error)?;
@@ -1572,16 +1570,14 @@ impl SslContextBuilder {
         }
     }
 
-    /// Sets the list of supported ciphers for protocols before TLSv1.3 but do not
-    /// tolerate anything meaningless in the cipher list.
+    /// Configures the cipher suites used by TLS 1.2 and earlier.
     ///
-    /// The `set_ciphersuites` method controls the cipher suites for TLSv1.3 in OpenSSL.
-    /// BoringSSL doesn't implement `set_ciphersuites`.
-    /// See <https://github.com/google/boringssl/blob/main/include/openssl/ssl.h#L1685>
+    /// Unlike [`Self::set_cipher_list`], this returns an error for unrecognized
+    /// entries. This method does not affect TLS 1.3 cipher suites.
     ///
-    /// See [`ciphers`] for details on the format.
+    /// See BoringSSL's [cipher suite configuration] for the list syntax.
     ///
-    /// [`ciphers`]: <https://docs.openssl.org/master/man1/openssl-ciphers/>.
+    /// [cipher suite configuration]: https://commondatastorage.googleapis.com/chromium-boringssl-docs/ssl.h.html#Cipher-suite-configuration
     #[corresponds(SSL_CTX_set_strict_cipher_list)]
     pub fn set_strict_cipher_list(&mut self, cipher_list: &str) -> Result<(), ErrorStack> {
         let cipher_list = CString::new(cipher_list).map_err(ErrorStack::internal_error)?;
@@ -2923,8 +2919,13 @@ impl Ssl {
         }
     }
 
+    /// Returns the process-wide extra data index associated with `T`.
+    ///
+    /// The index is allocated lazily on first use and reused by subsequent calls for the same
+    /// type. Callers must coordinate all uses of a given `T`, since they share one slot on every
+    /// [`Ssl`].
     // FIXME should return a result?
-    fn cached_ex_index<T>() -> Index<Ssl, T>
+    pub fn cached_ex_index<T>() -> Index<Ssl, T>
     where
         T: 'static + Sync + Send,
     {

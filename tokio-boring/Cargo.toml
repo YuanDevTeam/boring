@@ -16,6 +16,11 @@ An implementation of SSL streams for Tokio backed by BoringSSL
 features = ["rpk"]
 rustdoc-args = ["--cfg", "docsrs"]
 
+[package.metadata.release]
+pre-release-replacements = [
+    { file = "README.md", search = 'tokio-boring = "[^"]+"', replace = 'tokio-boring = "{{version}}"', exactly = 1, prerelease = true },
+]
+
 [features]
 default = ["boring/default"]
 reality = ["boring/reality"]
@@ -34,9 +39,11 @@ rpk = ["boring/rpk"]
 fips-precompiled = ["fips"]
 
 [dependencies]
+antidote = { workspace = true }
 boring = { workspace = true, default-features = false }
 boring-sys = { workspace = true, default-features = false }
-tokio = { workspace = true }
+linked_hash_set = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 brotli = { workspace = true }
