@@ -323,8 +323,11 @@ fn named_profile_preserves_reality_wire_authentication() {
     for profile in [
         ClientFingerprint::Chrome120,
         ClientFingerprint::Chrome133,
+        ClientFingerprint::Chrome155,
         ClientFingerprint::Firefox120,
+        ClientFingerprint::Firefox148,
         ClientFingerprint::Safari16,
+        ClientFingerprint::Safari263,
     ] {
         let connector =
             FingerprintConnector::new(SslConnector::builder(SslMethod::tls()).unwrap(), profile)
@@ -346,13 +349,60 @@ fn named_profile_preserves_reality_wire_authentication() {
             authenticate_hello(&server, &msg);
             let (groups, shares) = hello_groups(&msg);
             assert!(!groups.contains(&4588));
-            let expected = if profile == ClientFingerprint::Firefox120 {
+            let expected = if matches!(
+                profile,
+                ClientFingerprint::Firefox120 | ClientFingerprint::Firefox148
+            ) {
                 vec![(29, 32), (23, 65)]
             } else {
                 vec![(29, 32)]
             };
             assert_eq!(shares, expected, "{profile:?}");
             assert!(stream.ssl_mut().set_reality_client(&config).is_err());
+        }
+    }
+}
+
+#[cfg(feature = "client-fingerprint")]
+#[test]
+fn new_named_profiles_authenticate_when_either_x25519_group_is_selected() {
+    use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
+
+    for profile in [
+        ClientFingerprint::Chrome155,
+        ClientFingerprint::Firefox148,
+        ClientFingerprint::Safari263,
+    ] {
+        let connector =
+            FingerprintConnector::new(SslConnector::builder(SslMethod::tls()).unwrap(), profile)
+                .unwrap();
+        let make_client = |config: &RealityClientConfig| {
+            let mut connection = connector
+                .configure_with_application_settings(b"\x02h2", false)
+                .unwrap();
+            connection
+                .set_reality_client(&config.clone().allow_x25519mlkem768())
+                .unwrap();
+            connection.into_ssl("reality.test").unwrap()
+        };
+
+        let (server, config) = parameters();
+        let mut stream = capture(make_client(&config));
+        assert_eq!(stream.connect().unwrap_err().code(), ErrorCode::WANT_READ);
+        let message = hello(&stream.get_ref().wire);
+        let mut expected = vec![(4588, 1216), (29, 32)];
+        if profile == ClientFingerprint::Firefox148 {
+            expected.push((23, 65));
+        }
+        assert_eq!(hello_groups(&message).1, expected, "{profile:?}");
+        authenticate_hello(&server, &message);
+
+        for (group, expected) in [("X25519", 29), ("X25519MLKEM768", 4588)] {
+            assert_eq!(
+                memory_handshake_with_group(make_client, group, false, false, false, false)
+                    .unwrap_or_else(|error| panic!("{profile:?} with {group}: {error}")),
+                expected
+            );
         }
     }
 }

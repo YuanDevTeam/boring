@@ -9,10 +9,13 @@ use boring::{
     },
     x509::X509,
 };
-use foreign_types::ForeignTypeRef;
+use foreign_types::{ForeignType, ForeignTypeRef};
 use std::{
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -65,15 +68,23 @@ fn server(version: SslVersion, group: &str) -> SslAcceptorBuilder {
 
 fn ecdsa_certificate(server: &mut SslAcceptorBuilder) {
     use boring::{
-        asn1::Asn1Time,
-        bn::BigNum,
         ec::{EcGroup, EcKey},
         hash::MessageDigest,
         nid::Nid,
-        x509::X509Name,
     };
     let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
     let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+    let mut cert = certificate_builder(&key);
+    cert.sign(&key, MessageDigest::sha256()).unwrap();
+    server.set_certificate(&cert.build()).unwrap();
+    server.set_private_key(&key).unwrap();
+}
+
+fn certificate_builder(
+    key: &boring::pkey::PKeyRef<boring::pkey::Private>,
+) -> boring::x509::X509Builder {
+    use boring::{asn1::Asn1Time, bn::BigNum, x509::X509Name};
+
     let mut name = X509Name::builder().unwrap();
     name.append_entry_by_text("CN", "profile.test").unwrap();
     let name = name.build();
@@ -87,10 +98,60 @@ fn ecdsa_certificate(server: &mut SslAcceptorBuilder) {
         .unwrap();
     cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
         .unwrap();
-    cert.set_pubkey(&key).unwrap();
-    cert.sign(&key, MessageDigest::sha256()).unwrap();
-    server.set_certificate(&cert.build()).unwrap();
-    server.set_private_key(&key).unwrap();
+    cert.set_pubkey(key).unwrap();
+    cert
+}
+
+#[tokio::test]
+async fn chrome155_negotiates_each_mldsa_signature_with_native_verification() {
+    use boring::{pkey::Id, ssl::SslSignatureAlgorithm};
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        for (key_id, signature) in [
+            (
+                boring_sys::EVP_PKEY_ML_DSA_44,
+                SslSignatureAlgorithm::ML_DSA_44,
+            ),
+            (
+                boring_sys::EVP_PKEY_ML_DSA_65,
+                SslSignatureAlgorithm::ML_DSA_65,
+            ),
+            (
+                boring_sys::EVP_PKEY_ML_DSA_87,
+                SslSignatureAlgorithm::ML_DSA_87,
+            ),
+        ] {
+            let key = PKey::generate(Id::from_raw(key_id)).unwrap();
+            let certificate = certificate_builder(&key).build();
+            // SAFETY: The certificate and key are live and exclusively owned.
+            // Pure ML-DSA signs the message directly with no EVP digest.
+            let signature_len = unsafe {
+                boring_sys::X509_sign(certificate.as_ptr(), key.as_ptr(), std::ptr::null())
+            };
+            assert!(signature_len > 0, "{}", boring::error::ErrorStack::get());
+            let mut acceptor = server(SslVersion::TLS1_3, "X25519");
+            acceptor.set_certificate(&certificate).unwrap();
+            acceptor.set_private_key(&key).unwrap();
+            let acceptor = acceptor.build();
+
+            let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+            builder.cert_store_mut().add_cert(certificate).unwrap();
+            let connector =
+                FingerprintConnector::new(builder, ClientFingerprint::Chrome155).unwrap();
+            let (io, peer) = tokio::io::duplex(16 * 1024);
+            let (client, server) = tokio::join!(
+                tokio_boring::connect(connector.configure(b"\x02h2").unwrap(), "profile.test", io),
+                tokio_boring::accept(&acceptor, peer)
+            );
+            server.unwrap();
+            assert_eq!(
+                client.unwrap().ssl().peer_signature_algorithm(),
+                Some(signature)
+            );
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -416,6 +477,62 @@ async fn safari16_real_zlib_rejects_truncation_corruption_trailing_and_oversize(
             }
             assert_eq!(task.await.unwrap(), mode == 0);
         }
+    })
+    .await
+    .unwrap();
+}
+
+struct ZstdCertificate(Arc<AtomicBool>);
+impl boring::ssl::CertificateCompressor for ZstdCertificate {
+    const ALGORITHM: boring::ssl::CertificateCompressionAlgorithm =
+        boring::ssl::CertificateCompressionAlgorithm::ZSTD;
+    const CAN_COMPRESS: bool = true;
+    const CAN_DECOMPRESS: bool = false;
+
+    fn compress<W: std::io::Write>(&self, input: &[u8], output: &mut W) -> std::io::Result<()> {
+        output.write_all(&zstd::bulk::compress(input, 0)?)?;
+        self.0.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn firefox148_negotiates_p256_without_retry_and_decodes_a_zstd_certificate() {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let compressed = Arc::new(AtomicBool::new(false));
+        let mut acceptor = server(SslVersion::TLS1_3, "P-256");
+        acceptor
+            .add_certificate_compression_algorithm(ZstdCertificate(compressed.clone()))
+            .unwrap();
+        let acceptor = acceptor.build();
+        let (io, remote) = tokio::io::duplex(4096);
+        let task = tokio::spawn(async move {
+            let mut tls = tokio_boring::accept(&acceptor, remote).await.unwrap();
+            let mut request = [0; 4];
+            tls.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request, b"ping");
+            tls.write_all(b"pong").await.unwrap();
+        });
+
+        let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+        builder.set_custom_verify_callback(SslVerifyMode::PEER, |_| Ok(()));
+        let connector = FingerprintConnector::new(builder, ClientFingerprint::Firefox148).unwrap();
+        let mut tls =
+            tokio_boring::connect(connector.configure(b"\x02h2").unwrap(), "localhost", io)
+                .await
+                .unwrap();
+        assert_eq!(tls.ssl().version2(), Some(SslVersion::TLS1_3));
+        assert!(!tls.ssl().used_hello_retry_request());
+        assert_eq!(
+            unsafe { boring_sys::SSL_get_group_id(tls.ssl().as_ptr()) },
+            23
+        );
+        assert!(compressed.load(Ordering::Relaxed));
+        tls.write_all(b"ping").await.unwrap();
+        let mut response = [0; 4];
+        tls.read_exact(&mut response).await.unwrap();
+        assert_eq!(&response, b"pong");
+        task.await.unwrap();
     })
     .await
     .unwrap();

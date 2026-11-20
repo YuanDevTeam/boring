@@ -5,17 +5,22 @@ The fork follows boring 5.5.1 and the official BoringSSL 0.20261020.0 baseline
 build patches; the checked-out BoringSSL submodule contains upstream source.
 
 Enable `boring/client-fingerprint` or `tokio-boring/client-fingerprint` on this
-fork. The implemented fixed profiles are `ClientFingerprint::Chrome120` (classic
-X25519), `Chrome133` (ordinary TLS with native X25519MLKEM768 and X25519 shares,
-new ALPS and no padding), `Firefox120` (X25519/P-256 shares and fixed order) and
-`Safari16` (Safari 16.0, fixed order and Zlib) and `Ios14` (iOS 14, fixed order,
-CBC-SHA256 offers and no certificate compression), `Android11` (Android 11
-OkHttp), `Edge85`, `ThreeSixty75` (360 Browser 7.5) and `Qq111` (QQ 11.1).
-Android11 and ThreeSixty75 cap negotiation at TLS 1.2; a caller's higher minimum
-is still enforced rather than lowered. They are not aliases following a
-browser release automatically. Unknown profile names
-must be rejected by applications; this library does not silently map them to a
-different browser.
+fork. Each `ClientFingerprint` variant selects a fixed profile.
+
+| Family | Variants |
+| --- | --- |
+| Chrome | `Chrome120`, `Chrome133`, `Chrome155` |
+| Firefox | `Firefox120`, `Firefox148` |
+| Safari | `Safari16` (16.0), `Safari263` (26.3) |
+| iOS and Android | `Ios14`, `Android11` (OkHttp) |
+| Edge, 360 Browser and QQ | `Edge85`, `ThreeSixty75` (7.5), `Qq111` (11.1) |
+
+Existing variants retain their version and encoding. Applications must reject
+unknown names and explicitly select any newer variant. `Android11` and
+`ThreeSixty75` cap negotiation at TLS 1.2 and retain any stricter caller floor.
+`Chrome120` offers a classic X25519 share. `Chrome133` adds a hybrid share and
+the newer optional ALPS codepoint, and omits padding. `Firefox120` offers X25519
+and P-256 shares in a fixed order.
 
 ## Interface
 
@@ -51,12 +56,14 @@ discard already-negotiated settings. `configure(alpn)` remains equivalent to
 `configure_with_application_settings(alpn, true)`, preserving existing behavior.
 
 The profile configures ciphers, supported groups, signature algorithms, GREASE,
-extension permutation, SCT/OCSP, ECH GREASE and template-specific h2 ALPS. Certificate
-compression uses real Brotli for Chrome and Zlib for Safari; Firefox and iOS do not
-advertise it. This is not an advertised-only extension. The
-native certificate-message allocation and decoder output are bounded to 128 KiB.
-The profile does not disable certificate verification, weaken handshake signature
-verification, enable early data or create a resumption policy.
+extension permutation, SCT/OCSP, ECH GREASE and template-specific h2 ALPS.
+Chrome uses Brotli certificate decompression and Safari uses Zlib.
+`Firefox148` offers actual Zlib, Brotli and Zstd decoders in that order.
+`Firefox120` and `Ios14` omit certificate compression. The native certificate
+message allocation and decoder output are bounded to 128 KiB. The Zstd decoder
+also limits its window to 128 KiB and requires a single complete frame.
+Certificate and handshake signature verification stay active. The caller still
+controls early data and owns session storage.
 
 Edge85 and Qq111 preserve their fixed reference ordering; QQ declares old-codepoint
 h2 ALPS when enabled, while Edge does not. Android11 and ThreeSixty75 do not add
@@ -75,6 +82,27 @@ wire identity.
 only transports these bytes; the application remains responsible for interpreting
 them and enforcing its required ALPN before using or caching the connection.
 
+## Recent profiles
+
+- `Chrome155` offers native X25519MLKEM768 and X25519 shares, GREASE followed
+  by native TLS 1.3 ML-DSA-44/65/87 signature schemes, and the newer h2 ALPS
+  codepoint when ALPS is enabled. The per-connection `trust_anchors` extension
+  requests the 28 identifiers recorded in the Chrome 155 reference. The IDs
+  can influence the peer's certificate chain choice. The caller's trust store
+  and certificate verifier still determine acceptance. The profile does not
+  initiate an anchor-discovery retry.
+  [Chrome 155 reference](https://github.com/refraction-networking/utls/blob/360383f893fbe954ff12a701b87295406abbc156/testdata/chrome155_clienthello.md)
+- `Firefox148` generates X25519MLKEM768, X25519 and P-256 shares in that order.
+  The hybrid and standalone X25519 entries use one ephemeral X25519 key within
+  each ClientHello. A cold connection omits the TLS 1.2 ticket extension and
+  TLS 1.3 PSK modes. The native handshake can send a real TLS 1.2 ticket or
+  TLS 1.3 PSK and its required modes when an eligible session is available.
+  A cold peer may decline to issue a TLS 1.3 ticket.
+- `Safari263` offers independently generated X25519MLKEM768 and X25519 shares,
+  uses a fixed extension order and TLS 1.3 cipher order, and omits padding.
+  `Chrome155`, `Firefox148`, and `Safari263` require at least TLS 1.2 and
+  retain a stricter caller floor.
+
 ## REALITY
 
 With both features enabled, use the same connector and set
@@ -84,24 +112,20 @@ exception and native CertificateVerify checks remain in the native handshake.
 The full connection-local invariants and deliberately unsupported combinations
 are documented in [REALITY](reality-client.md).
 
-The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) cover the four originally accepted
-profiles' classic REALITY shape and authentication binding. Classic mode removes
-Chrome133's ML-KEM group/share and preserves Firefox's additional P-256 share.
-Independent VCore/Mihomo data paths still require application integration and
-fresh container acceptance; ordinary-TLS ML-KEM is not PQ REALITY.
+Classic mode remains the default. It removes X25519MLKEM768 from both the
+advertised groups and the actual key shares of hybrid-capable profiles while
+preserving the remaining shares, including Firefox's P-256.
+The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) preserve the original
+profile coverage.
 
-For explicit hybrid REALITY, only Chrome133 among this fixed catalog has the
-required group/share. Configure `RealityClientConfig::require_x25519mlkem768`
-separately; classic remains the default. The other fixed profiles fail rather
-than changing their wire identities. Both actual hybrid negotiation and native
-REALITY authentication are required. See the independent [hybrid fork gate](reality-hybrid.md);
-its checks do not establish VCore's production/download-leg support.
-
-`RealityClientConfig::allow_x25519mlkem768` instead preserves the profile's actual
-shares and allows either classic or hybrid selection within the same authenticated
-handshake. A classic profile remains classic; this does not invent a hybrid share
-or retry a rejected connection. Classic mode remains the default, and required
-hybrid mode keeps its existing requirement.
+`Chrome133`, `Chrome155`, `Firefox148` and `Safari263` offer the native group
+and share needed by `RealityClientConfig::require_x25519mlkem768`. This mode
+requires actual hybrid negotiation and native REALITY authentication. The other
+fixed profiles fail when hybrid is required. `allow_x25519mlkem768` preserves
+the selected profile's existing shares and accepts either supported choice
+within the same authenticated handshake. Rejected handshakes terminate without
+a retry. REALITY identity remains bound to X25519 and its native verification.
+See the [hybrid fork gate](reality-hybrid.md) for the original independent checks.
 
 ## Scope and verification
 
@@ -126,12 +150,11 @@ and is deprecated/default-off outside explicit cipher configuration. No RC4 was
 restored. Safari's repeated signature scheme is a wire encoding detail; real
 signature verification preferences remain unique.
 
-Applications must set their TLS version floor (VCore uses TLS1.2), which trims
-Safari's reference TLS1.0/1.1 advertisement. Safari omits the cold session-ticket
-extension. Actual caller-supplied TLS1.2 tickets can still use it; warm connections
-are not claimed as identical to the reference cold template. Zlib rejects
+For `Safari16`, a caller's TLS 1.2 floor trims the reference TLS 1.0/1.1
+advertisement. Both Safari profiles omit the cold session-ticket extension. An
+eligible TLS 1.2 ticket can still be offered on a warm connection. Zlib rejects
 truncation, corrupt checksums, trailing bytes and oversized output before passing
-the certificate to the unchanged verifier.
+the certificate to the verifier.
 
 TLS1.3 cipher order and Chrome ECH GREASE AEAD are fixed by the named template,
 not CPU AES acceleration. Real native cipher filtering, key generation,
@@ -142,20 +165,20 @@ Targeted checks create only memory streams, including real native TLS peers:
 
 ```sh
 cargo test -p boring --features reality,client-fingerprint --test client_fingerprint --test selected_fingerprint --test reality --test hkdf
+cargo test -p boring --features client-fingerprint --lib zstd_decoder_
 cargo test -p tokio-boring --features reality,client-fingerprint --test client_fingerprint --test selected_fingerprint
 cargo clippy -p boring -p tokio-boring --features reality,client-fingerprint --lib -- -D warnings
 cargo fmt --all -- --check
 ```
 
-The earlier isolated Mihomo, ordinary-TLS, Vision and handshake experiments are
-selection/integration evidence, not reasons to repeat general backend feasibility
-work. The tests above exercise the new named interface. Application wiring,
-portable pinned Git dependency resolution, device behavior and release review are
-separate gates; passing these library tests does not complete those gates.
+These checks cover the library's wire encoding, certificate decompression and
+native handshakes. Application wiring, locked Git dependency resolution,
+interoperability with external peers, device behavior and release review require
+separate validation.
 
 ### Historical initial-interface result — 2026-09-25
 
-On macOS ARM64, the current named interface passed one wire-profile test, eight
+On macOS ARM64, the initial named interface passed one wire-profile test, eight
 REALITY tests (including the named-profile authentication case), nine existing
 HKDF tests and two Tokio memory-handshake tests: 20 total. The Tokio tests cover
 absent/empty/nonempty peer ALPS and actual Brotli certificate decoding with both

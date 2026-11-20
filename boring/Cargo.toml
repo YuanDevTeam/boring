@@ -21,7 +21,7 @@ default = []
 reality = ["boring-sys/reality"]
 shadow-tls-v3 = ["reality", "boring-sys/shadow-tls-v3"]
 jls = ["shadow-tls-v3", "boring-sys/jls"]
-client-fingerprint = ["dep:brotli", "dep:flate2", "boring-sys/client-fingerprint"]
+client-fingerprint = ["dep:brotli", "dep:flate2", "dep:zstd", "boring-sys/client-fingerprint"]
 
 # Use a FIPS-validated version of BoringSSL.
 fips = ["boring-sys/fips"]
@@ -69,6 +69,7 @@ fips-precompiled = ["fips"]
 [dependencies]
 brotli = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 bitflags = { workspace = true }
 foreign-types = { workspace = true }
 openssl-macros = { workspace = true }

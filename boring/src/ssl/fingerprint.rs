@@ -32,6 +32,12 @@ pub enum ClientFingerprint {
     ThreeSixty75,
     /// QQ 11.1, including its old-codepoint h2 ALPS declaration.
     Qq111,
+    /// Chrome 155.0.8059.40 on macOS, with ML-DSA and advertised trust anchor IDs.
+    Chrome155,
+    /// Firefox 148 with a shared X25519 key across its hybrid and classic shares.
+    Firefox148,
+    /// Safari 26.3 with native X25519MLKEM768 and X25519 shares and Zlib.
+    Safari263,
 }
 
 // A closed, bounded catalog, not user-supplied extension/cipher data. The native
@@ -48,14 +54,16 @@ struct Profile {
     sct: bool,
     ech_grease: bool,
     alps_new_codepoint: Option<bool>,
-    compression: Compression,
+    compression: &'static [Compression],
+    requested_trust_anchors: &'static [u8],
+    tls12_floor: bool,
     tls12_only: bool,
 }
 
 enum Compression {
-    None,
     Brotli,
     Zlib,
+    Zstd,
 }
 
 impl ClientFingerprint {
@@ -70,6 +78,9 @@ impl ClientFingerprint {
             Self::Edge85 => &EDGE85,
             Self::ThreeSixty75 => &THREE_SIXTY75,
             Self::Qq111 => &QQ111,
+            Self::Chrome155 => &CHROME155,
+            Self::Firefox148 => &FIREFOX148,
+            Self::Safari263 => &SAFARI263,
         }
     }
 }
@@ -95,7 +106,9 @@ const CHROME120: Profile = Profile {
     sct: true,
     ech_grease: true,
     alps_new_codepoint: Some(false),
-    compression: Compression::Brotli,
+    compression: &[Compression::Brotli],
+    requested_trust_anchors: &[],
+    tls12_floor: false,
     tls12_only: false,
 };
 
@@ -129,7 +142,9 @@ const FIREFOX120: Profile = Profile {
     sct: false,
     ech_grease: true,
     alps_new_codepoint: None,
-    compression: Compression::None,
+    compression: &[],
+    requested_trust_anchors: &[],
+    tls12_floor: false,
     tls12_only: false,
 };
 
@@ -156,7 +171,9 @@ const SAFARI16: Profile = Profile {
     sct: true,
     ech_grease: false,
     alps_new_codepoint: None,
-    compression: Compression::Zlib,
+    compression: &[Compression::Zlib],
+    requested_trust_anchors: &[],
+    tls12_floor: false,
     tls12_only: false,
 };
 
@@ -174,7 +191,7 @@ const IOS14: Profile = Profile {
         "AES256-GCM-SHA384:AES128-GCM-SHA256:AES128-SHA256:AES256-SHA:AES128-SHA:",
         "ECDHE-RSA-DES-CBC3-SHA:DES-CBC3-SHA"
     ),
-    compression: Compression::None,
+    compression: &[],
     ..SAFARI16
 };
 
@@ -201,7 +218,7 @@ const ANDROID11: Profile = Profile {
     sct: false,
     ech_grease: false,
     alps_new_codepoint: None,
-    compression: Compression::None,
+    compression: &[],
     tls12_only: true,
     ..CHROME120
 };
@@ -235,6 +252,75 @@ const QQ111: Profile = Profile {
     ..EDGE85
 };
 
+// The public IDs in the captured Chrome 155 trust_anchors extension. The
+// native API takes the one-byte-length-prefixed IDs and encodes the list length.
+// https://github.com/refraction-networking/utls/blob/360383f893fbe954ff12a701b87295406abbc156/testdata/chrome155_clienthello.hex
+const CHROME155_TRUST_ANCHORS: &[u8] = b"\
+    \x05\x82\xdf\x13\x02\x01\
+    \x05\x82\xdf\x13\x02\x06\
+    \x05\x82\xdf\x13\x02\x0d\
+    \x05\x82\xdf\x13\x02\x0e\
+    \x05\x82\xdf\x13\x02\x0f\
+    \x05\x82\xdf\x13\x02\x12\
+    \x05\x82\xdf\x13\x02\x13\
+    \x05\x82\xdf\x13\x02\x14\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x07\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x08\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x09\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x0a\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x0b\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x0c\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x0d\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x12\
+    \x08\x83\x9a\x64\x8c\x9b\x2d\x01\x13\
+    \x04\xd6\x79\x09\x01\
+    \x04\xd6\x79\x09\x04\
+    \x04\xd6\x79\x09\x05\
+    \x04\xd6\x79\x09\x06\
+    \x04\xd6\x79\x09\x07\
+    \x04\xd6\x79\x09\x08\
+    \x04\xd6\x79\x09\x0a\
+    \x04\xd6\x79\x09\x0b\
+    \x04\xd6\x79\x09\x0c\
+    \x04\xd6\x79\x09\x0d\
+    \x04\xd6\x79\x09\x0f";
+
+const CHROME155: Profile = Profile {
+    native_id: 10,
+    signatures: concat!(
+        "mldsa44:mldsa65:mldsa87:",
+        "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
+        "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
+        "rsa_pss_rsae_sha512:rsa_pkcs1_sha512"
+    ),
+    requested_trust_anchors: CHROME155_TRUST_ANCHORS,
+    tls12_floor: true,
+    ..CHROME133
+};
+
+const FIREFOX148: Profile = Profile {
+    native_id: 11,
+    groups: &[4588, 29, 23, 24, 25],
+    key_shares: &[4588, 29, 23],
+    sct: true,
+    compression: &[Compression::Zlib, Compression::Brotli, Compression::Zstd],
+    tls12_floor: true,
+    ..FIREFOX120
+};
+
+const SAFARI263: Profile = Profile {
+    native_id: 12,
+    groups: &[4588, 29, 23, 24, 25],
+    key_shares: &[4588, 29],
+    signatures: concat!(
+        "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
+        "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
+        "rsa_pss_rsae_sha512:rsa_pkcs1_sha512:rsa_pkcs1_sha1"
+    ),
+    tls12_floor: true,
+    ..SAFARI16
+};
+
 /// Immutable profile plus caller-configured TLS trust, versions and identity.
 /// Each connection supplies its transport ALPN; no profile can override it.
 #[derive(Debug, Clone)]
@@ -252,6 +338,13 @@ impl FingerprintConnector {
         profile: ClientFingerprint,
     ) -> Result<Self, ErrorStack> {
         let spec = profile.profile();
+        if spec.tls12_floor
+            && builder
+                .min_proto_version()
+                .is_none_or(|minimum| minimum.0 < SslVersion::TLS1_2.0)
+        {
+            builder.set_min_proto_version(Some(SslVersion::TLS1_2))?;
+        }
         if spec.tls12_only
             && builder
                 .max_proto_version()
@@ -269,10 +362,12 @@ impl FingerprintConnector {
             builder.enable_signed_cert_timestamps();
         }
         builder.enable_ocsp_stapling();
-        match spec.compression {
-            Compression::None => {}
-            Compression::Brotli => builder.add_certificate_compression_algorithm(Brotli)?,
-            Compression::Zlib => builder.add_certificate_compression_algorithm(Zlib)?,
+        for algorithm in spec.compression {
+            match algorithm {
+                Compression::Brotli => builder.add_certificate_compression_algorithm(Brotli)?,
+                Compression::Zlib => builder.add_certificate_compression_algorithm(Zlib)?,
+                Compression::Zstd => builder.add_certificate_compression_algorithm(Zstd)?,
+            }
         }
         // These setters copy bounded static values; native code validates IDs.
         unsafe {
@@ -320,6 +415,13 @@ impl FingerprintConnector {
                 spec.key_shares.as_ptr(),
                 spec.key_shares.len(),
             ))?;
+            if !spec.requested_trust_anchors.is_empty() {
+                cvt(ffi::SSL_set1_requested_trust_anchors(
+                    config.as_ptr(),
+                    spec.requested_trust_anchors.as_ptr(),
+                    spec.requested_trust_anchors.len(),
+                ))?;
+            }
         }
         config.set_alpn_protos(alpn)?;
         config.set_enable_ech_grease(spec.ech_grease);
@@ -427,6 +529,100 @@ impl CertificateCompressor for Brotli {
                 return Err(io::Error::other("certificate output limit"));
             }
             output.write_all(&buffer[..count])?;
+        }
+    }
+}
+
+struct Zstd;
+impl CertificateCompressor for Zstd {
+    const ALGORITHM: CertificateCompressionAlgorithm = CertificateCompressionAlgorithm::ZSTD;
+    const CAN_COMPRESS: bool = false;
+    const CAN_DECOMPRESS: bool = true;
+
+    fn decompress<W: Write>(&self, input: &[u8], output: &mut W) -> io::Result<()> {
+        if input.len() > MAX_CERTIFICATE_BYTES {
+            return Err(io::Error::other("compressed certificate limit"));
+        }
+        if !input.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+            return Err(io::Error::other("invalid Zstandard certificate frame"));
+        }
+        // Using the slice directly preserves any input after the first frame.
+        let mut decoder = zstd::stream::read::Decoder::with_buffer(input)?.single_frame();
+        decoder.window_log_max(MAX_CERTIFICATE_BYTES.ilog2())?;
+        io::copy(
+            &mut decoder.by_ref().take(MAX_CERTIFICATE_BYTES as u64),
+            output,
+        )?;
+        // At the output limit one more read completes the frame or detects overflow.
+        if decoder.read(&mut [0])? != 0 || !decoder.into_inner().is_empty() {
+            return Err(io::Error::other(
+                "invalid or oversized certificate compression",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CertificateCompressor, Zstd, MAX_CERTIFICATE_BYTES};
+    use std::io::{self, Write};
+
+    #[test]
+    fn zstd_decoder_accepts_a_single_checked_frame_at_the_certificate_limit() {
+        let expected = vec![0xa5; MAX_CERTIFICATE_BYTES];
+        let compressed = zstd::bulk::compress(&expected, 0).unwrap();
+        let mut output = Vec::new();
+        Zstd.decompress(&compressed, &mut output).unwrap();
+        assert_eq!(output, expected);
+
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
+        encoder.include_checksum(true).unwrap();
+        encoder.window_log(MAX_CERTIFICATE_BYTES.ilog2()).unwrap();
+        encoder.write_all(b"certificate").unwrap();
+        let mut checksummed = encoder.finish().unwrap();
+        output.clear();
+        Zstd.decompress(&checksummed, &mut output).unwrap();
+        assert_eq!(output, b"certificate");
+        *checksummed.last_mut().unwrap() ^= 1;
+        assert!(Zstd.decompress(&checksummed, &mut io::sink()).is_err());
+    }
+
+    #[test]
+    fn zstd_decoder_rejects_truncation_extra_frames_and_excessive_sizes() {
+        let compressed = zstd::bulk::compress(b"certificate", 0).unwrap();
+        let mut trailing = compressed.clone();
+        trailing.push(0);
+        let concatenated = [compressed.as_slice(), compressed.as_slice()].concat();
+        // A full-size raw block produces exactly the allowed output. Its
+        // framing makes the input exceed the limit.
+        let mut over_input = b"\x28\xb5\x2f\xfd\x00\x38\x01\x00\x10".to_vec();
+        over_input.resize(over_input.len() + MAX_CERTIFICATE_BYTES, 0);
+        assert_eq!(
+            zstd::bulk::decompress(&over_input, MAX_CERTIFICATE_BYTES)
+                .unwrap()
+                .len(),
+            MAX_CERTIFICATE_BYTES
+        );
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
+        encoder.window_log(MAX_CERTIFICATE_BYTES.ilog2()).unwrap();
+        encoder
+            .write_all(&vec![0; MAX_CERTIFICATE_BYTES + 1])
+            .unwrap();
+        let over_output = encoder.finish().unwrap();
+        // A one-byte raw block framed with a 256 KiB decoder window.
+        let over_window = b"\x28\xb5\x2f\xfd\x00\x40\x09\x00\x00a";
+        assert_eq!(zstd::bulk::decompress(over_window, 1).unwrap(), b"a");
+        for invalid in [
+            &compressed[..compressed.len() - 1],
+            &trailing,
+            &concatenated,
+            &over_input,
+            &over_output,
+            over_window,
+            b"\x50\x2a\x4d\x18\x00\x00\x00\x00", // skippable frame
+        ] {
+            assert!(Zstd.decompress(invalid, &mut io::sink()).is_err());
         }
     }
 }

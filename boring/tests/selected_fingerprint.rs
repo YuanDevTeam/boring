@@ -499,17 +499,16 @@ fn ios_rsa_sha256_cipher_is_excluded_from_the_default_offer() {
 }
 
 fn profile_fields(profile: ClientFingerprint) -> (Vec<u16>, Vec<(u16, Vec<u8>)>) {
-    profile_fields_with_settings(profile, true)
+    profile_fields_with_settings(profile, true, SslVersion::TLS1_2)
 }
 
 fn profile_fields_with_settings(
     profile: ClientFingerprint,
     application_settings: bool,
+    min_version: SslVersion,
 ) -> (Vec<u16>, Vec<(u16, Vec<u8>)>) {
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    builder
-        .set_min_proto_version(Some(SslVersion::TLS1_2))
-        .unwrap();
+    builder.set_min_proto_version(Some(min_version)).unwrap();
     let connector = FingerprintConnector::new(builder, profile).unwrap();
     let error = connector
         .configure_with_application_settings(b"\x02h2\x08http/1.1", application_settings)
@@ -534,6 +533,139 @@ fn profile_fields_with_settings(
         rows.push((kind, vector(&mut extensions, 2).to_vec()));
     }
     (ciphers, rows)
+}
+
+fn key_shares(mut extension: &[u8]) -> Vec<(u16, &[u8])> {
+    let mut encoded = vector(&mut extension, 2);
+    assert!(extension.is_empty());
+    let mut shares = Vec::new();
+    while !encoded.is_empty() {
+        let group = codes(take(&mut encoded, 2))[0];
+        shares.push((group, vector(&mut encoded, 2)));
+    }
+    shares
+}
+
+#[test]
+fn chrome155_advertises_native_signatures_and_the_captured_trust_anchor_list() {
+    let (_, extensions) = profile_fields(ClientFingerprint::Chrome155);
+    let value = |id| {
+        extensions
+            .iter()
+            .find(|(kind, _)| *kind == id)
+            .unwrap()
+            .1
+            .as_slice()
+    };
+    assert_eq!(value(17613), b"\0\x03\x02h2");
+    let signatures = codes(&value(13)[2..]);
+    assert!(grease(signatures[0]));
+    assert_eq!(
+        signatures[1..],
+        [0x0904, 0x0905, 0x0906, 0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601]
+    );
+    let anchors = value(0xca34);
+    assert_eq!(anchors.len(), 186);
+    // SHA-256 of the extension body in the independent Chrome 155 capture.
+    assert_eq!(
+        hex::encode(boring::sha::sha256(anchors)),
+        "734236b257e52e7d202b222a0694fedf187c12b11a4fcc733dd00f3331b7f16c"
+    );
+    let shares = key_shares(value(51));
+    assert!(grease(shares[0].0));
+    assert_eq!(shares[0].1, &[0]);
+    assert_eq!((shares[1].0, shares[1].1.len()), (4588, 1216));
+    assert_eq!((shares[2].0, shares[2].1.len()), (29, 32));
+    assert_ne!(&shares[1].1[1184..], shares[2].1);
+    assert_eq!(shares.len(), 3);
+}
+
+#[test]
+fn firefox148_reuses_the_x25519_key_and_offers_ordered_certificate_compression() {
+    let (ciphers, extensions) = profile_fields(ClientFingerprint::Firefox148);
+    assert_eq!(&ciphers[..3], &[0x1301, 0x1303, 0x1302]);
+    assert_eq!(
+        extensions.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+        [0, 23, 65281, 10, 11, 16, 5, 34, 18, 51, 43, 13, 28, 27, 65037]
+    );
+    let value = |id| {
+        extensions
+            .iter()
+            .find(|(kind, _)| *kind == id)
+            .unwrap()
+            .1
+            .as_slice()
+    };
+    assert_eq!(value(27), &[6, 0, 1, 0, 2, 0, 3]);
+    assert_eq!(codes(&value(10)[2..]), [4588, 29, 23, 24, 25, 256, 257]);
+    let shares = key_shares(value(51));
+    assert_eq!(
+        shares
+            .iter()
+            .map(|(group, bytes)| (*group, bytes.len()))
+            .collect::<Vec<_>>(),
+        [(4588, 1216), (29, 32), (23, 65)]
+    );
+    assert_eq!(&shares[0].1[1184..], shares[1].1);
+}
+
+#[test]
+fn safari263_preserves_its_fixed_order_and_independent_hybrid_share() {
+    let (ciphers, extensions) = profile_fields(ClientFingerprint::Safari263);
+    assert!(grease(ciphers[0]));
+    assert_eq!(&ciphers[1..4], &[0x1302, 0x1303, 0x1301]);
+    let kinds: Vec<_> = extensions.iter().map(|(kind, _)| *kind).collect();
+    assert!(grease(kinds[0]));
+    assert!(grease(*kinds.last().unwrap()));
+    assert_eq!(
+        kinds[1..kinds.len() - 1],
+        [0, 23, 65281, 10, 11, 16, 5, 13, 18, 51, 45, 43, 27]
+    );
+    let value = |id| {
+        extensions
+            .iter()
+            .find(|(kind, _)| *kind == id)
+            .unwrap()
+            .1
+            .as_slice()
+    };
+    assert_eq!(value(27), &[2, 0, 1]);
+    assert_eq!(
+        codes(&value(13)[2..]),
+        [0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201]
+    );
+    let shares = key_shares(value(51));
+    assert!(grease(shares[0].0));
+    assert_eq!(shares[0].1, &[0]);
+    assert_eq!((shares[1].0, shares[1].1.len()), (4588, 1216));
+    assert_eq!((shares[2].0, shares[2].1.len()), (29, 32));
+    assert_ne!(&shares[1].1[1184..], shares[2].1);
+    assert_eq!(shares.len(), 3);
+}
+
+#[test]
+fn recent_profiles_require_tls12_and_keep_the_callers_tls13_floor() {
+    for profile in [
+        ClientFingerprint::Chrome155,
+        ClientFingerprint::Firefox148,
+        ClientFingerprint::Safari263,
+    ] {
+        for (requested, expected) in [
+            (SslVersion::TLS1_1, &[0x0304, 0x0303][..]),
+            (SslVersion::TLS1_3, &[0x0304][..]),
+        ] {
+            let (_, extensions) = profile_fields_with_settings(profile, true, requested);
+            let versions = &extensions.iter().find(|(kind, _)| *kind == 43).unwrap().1;
+            assert_eq!(
+                codes(&versions[1..])
+                    .into_iter()
+                    .filter(|id| !grease(*id))
+                    .collect::<Vec<_>>(),
+                expected,
+                "{profile:?} with {requested:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -674,9 +806,10 @@ fn callers_without_alps_consumers_keep_h2_without_advertising_either_codepoint()
     for profile in [
         ClientFingerprint::Chrome120,
         ClientFingerprint::Chrome133,
+        ClientFingerprint::Chrome155,
         ClientFingerprint::Qq111,
     ] {
-        let (_, extensions) = profile_fields_with_settings(profile, false);
+        let (_, extensions) = profile_fields_with_settings(profile, false, SslVersion::TLS1_2);
         assert!(!extensions
             .iter()
             .any(|(kind, _)| matches!(kind, 17513 | 17613)));
