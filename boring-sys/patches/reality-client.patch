@@ -224,7 +224,7 @@ diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
 +  ssl_impl->config->supported_group_list_flags = std::move(flags);
 +  ssl_impl->config->client_key_share_selections.emplace();
 +  ssl_impl->config->client_key_share_selections->CopyFrom(shares);
-+  ssl_impl->config->reality_client.emplace();
++  ssl_impl->config->reality_client.emplace(SSL_CONFIG::RealityClient{});
 +  auto &reality = *ssl_impl->config->reality_client;
 +  reality.allow_x25519mlkem768 = allow_hybrid;
 +  reality.require_x25519mlkem768 = require_hybrid;
