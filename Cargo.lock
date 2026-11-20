@@ -82,7 +82,7 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "boring"
-version = "5.5.1"
+version = "5.6.0"
 dependencies = [
  "bitflags",
  "boring-sys",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "boring-sys"
-version = "5.5.1"
+version = "5.6.0"
 dependencies = [
  "bindgen",
  "cmake",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "hyper-boring"
-version = "5.5.1"
+version = "5.6.0"
 dependencies = [
  "boring",
  "bytes",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "tokio-boring"
-version = "5.5.1"
+version = "5.6.0"
 dependencies = [
  "antidote",
  "anyhow",
