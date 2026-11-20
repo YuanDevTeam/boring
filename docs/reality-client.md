@@ -1,6 +1,6 @@
 # REALITY client (opt-in, classic by default)
 
-The opt-in `reality` feature is maintained on the 5.4.0 fork baseline.
+The opt-in `reality` feature is maintained on the 5.5.1 fork baseline.
 It is not by itself a production migration or a published release.
 The BoringSSL submodule remains pinned; an opt-in build-time patch is shipped
 alongside the fork's existing patches. No private memory-layout assumptions,
