@@ -26,7 +26,7 @@ jobs:
           if (!$install) { throw 'Visual Studio ARM64 build tools were not found' }
           & (Join-Path $install 'Common7\Tools\Launch-VsDevShell.ps1') -Arch arm64 -HostArch arm64 -SkipAutomaticLocation
 
-          $clang = (Get-Command clang-cl.exe -CommandType Application).Source
+          $clang = Get-Command clang-cl.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Source
           & $clang --version
           Write-Host "MSVC tools $env:VCToolsVersion"
           $env:LIBCLANG_PATH = Split-Path $clang
