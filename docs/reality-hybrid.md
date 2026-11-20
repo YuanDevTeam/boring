@@ -156,6 +156,8 @@ The host probe is client-only, not a VCore runtime or protected socket path.
 The fork harness explicitly receives a VCore checkout for its existing isolated
 lab and official downloader; it does not discover an implicit sibling directory.
 The tested lab source baseline is `def0e19cb0945614397c884388a9ee561818a19a`.
+The current probe selects Chrome155 for its `chrome` cases. The tables above
+record the earlier Chrome133 runs.
 Use a fresh direct child under that checkout's ignored `target/interop/runs`:
 
 ```sh

@@ -71,7 +71,7 @@ fn probe() -> Result<(), &'static str> {
     // Prove that permissive external trust cannot bypass REALITY authentication.
     builder.set_custom_verify_callback(SslVerifyMode::NONE, |_| Ok(()));
     let mut configuration = match fields[5] {
-        "chrome" => FingerprintConnector::new(builder, ClientFingerprint::Chrome133)
+        "chrome" => FingerprintConnector::new(builder, ClientFingerprint::Chrome155)
             .map_err(|_| "config")?
             .configure(b"\x08http/1.1")
             .map_err(|_| "config")?,

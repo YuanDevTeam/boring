@@ -187,9 +187,9 @@ fn all_named_profiles_authenticate_the_final_hello() {
     use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
     for profile in [
         ClientFingerprint::Chrome120,
-        ClientFingerprint::Chrome133,
-        ClientFingerprint::Firefox120,
-        ClientFingerprint::Safari16,
+        ClientFingerprint::Chrome155,
+        ClientFingerprint::Firefox148,
+        ClientFingerprint::Safari263,
     ] {
         let builder = SslConnector::builder(SslMethod::tls()).unwrap();
         let connector = FingerprintConnector::new(builder, profile).unwrap();

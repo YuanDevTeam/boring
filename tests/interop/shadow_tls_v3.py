@@ -267,7 +267,7 @@ def main():
                 if not passed:
                     raise RuntimeError(f"case failed: {label}")
 
-            for profile in ("none", "chrome120", "chrome133", "firefox120", "safari16"):
+            for profile in ("none", "chrome120", "chrome155", "firefox148", "safari263"):
                 for v6 in (False, True):
                     for version, port in (("TLS1.3", 23001), ("TLS1.2", 23002)):
                         probe(
@@ -277,7 +277,7 @@ def main():
                             port=port,
                             v6=v6,
                         )
-            probe("chrome133-hrr", profile="chrome133", port=23003, hrr=True)
+            probe("chrome155-hrr", profile="chrome155", port=23003, hrr=True)
             probe(
                 "wrong-password",
                 supplied_password="synthetic-wrong-password",

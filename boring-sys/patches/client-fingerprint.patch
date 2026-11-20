@@ -1,5 +1,5 @@
 diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
-index 67b6537..650fb52 100644
+index 67b6537..8272cde 100644
 --- a/include/openssl/ssl.h
 +++ b/include/openssl/ssl.h
 @@ -5689,6 +5689,14 @@ OPENSSL_EXPORT void SSL_CTX_set_permute_extensions(SSL_CTX *ctx, int enabled);
@@ -7,9 +7,9 @@ index 67b6537..650fb52 100644
  OPENSSL_EXPORT void SSL_set_permute_extensions(SSL *ssl, int enabled);
  
 +// Opt-in named profile encoding from this fork. Only built-in, implemented
-+// profile IDs are accepted (1 = Chrome120, 2 = Chrome133, 3 = Firefox120,
-+// 4 = Safari16, 5 = iOS14, 6 = Android11, 7 = Edge85,
-+// 8 = 360 7.5, 9 = QQ 11.1).
++// profile IDs are accepted (1 = Chrome120, 5 = iOS14, 6 = Android11,
++// 7 = Edge85, 8 = 360 7.5, 9 = QQ 11.1, 10 = Chrome155,
++// 11 = Firefox148, 12 = Safari26.3). IDs 2 through 4 are retired.
 +// Trust, versions, ALPN and sessions remain caller-owned.
 +// Fresh stream clients only; no raw ClientHello API.
 +OPENSSL_EXPORT int SSL_set_client_fingerprint(SSL *ssl, unsigned profile);
@@ -18,7 +18,7 @@ index 67b6537..650fb52 100644
  // record with `ssl`.
  OPENSSL_EXPORT size_t SSL_max_seal_overhead(const SSL *ssl);
 diff --git a/ssl/encrypted_client_hello.cc b/ssl/encrypted_client_hello.cc
-index a8bec51..ab78ecf 100644
+index a8bec51..3698205 100644
 --- a/ssl/encrypted_client_hello.cc
 +++ b/ssl/encrypted_client_hello.cc
 @@ -741,9 +741,13 @@ static bool setup_ech_grease(SSL_HANDSHAKE *hs) {
@@ -30,7 +30,7 @@ index a8bec51..ab78ecf 100644
 -                                  : EVP_hpke_chacha20_poly1305();
 +  // Chrome's GREASE shape is fixed by its template, not the local CPU.
 +  const uint8_t profile = hs->config->client_fingerprint;
-+  const bool firefox = profile == 3 || profile == kFirefox148Fingerprint;
++  const bool firefox = profile == kFirefox148Fingerprint;
 +  const bool use_aes = firefox ? random_size(0, 1) != 0
 +                               : profile != 0 || EVP_has_aes_hardware();
 +  const EVP_HPKE_AEAD *aead =
@@ -49,17 +49,17 @@ index a8bec51..ab78ecf 100644
    CBB enc_cbb, payload_cbb;
    uint8_t *payload;
 diff --git a/ssl/extensions.cc b/ssl/extensions.cc
-index 2df6fbc..6029b22 100644
+index 2df6fbc..b62b20e 100644
 --- a/ssl/extensions.cc
 +++ b/ssl/extensions.cc
 @@ -366,6 +366,13 @@ bool tls12_add_verify_sigalgs(const SSL_HANDSHAKE *hs, CBB *out) {
      if (!CBB_add_u16(out, sigalg)) {
        return false;
      }
-+    // Safari repeats this signature scheme. Keep real verification preferences
-+    // unique and preserve the duplicate only in the final transcript encoding.
++    // The Safari and iOS templates repeat this scheme. Keep native
++    // verification preferences unique and repeat only in the transcript.
 +    const uint8_t profile = hs->config->client_fingerprint;
-+    if ((profile == 4 || profile == 5 || profile == kSafari263Fingerprint) &&
++    if ((profile == 5 || profile == kSafari263Fingerprint) &&
 +        sigalg == SSL_SIGN_RSA_PSS_RSAE_SHA384 && !CBB_add_u16(out, sigalg)) {
 +      return false;
 +    }
@@ -73,7 +73,7 @@ index 2df6fbc..6029b22 100644
 +  // These cold templates omit this extension. A caller's actual TLS 1.2
 +  // ticket may still be offered.
 +  const uint8_t profile = hs->config->client_fingerprint;
-+  if ((profile == 4 || profile == 5 || profile == 6 ||
++  if ((profile == 5 || profile == 6 ||
 +       profile == kFirefox148Fingerprint || profile == kSafari263Fingerprint) &&
 +      (ssl->session == nullptr ||
 +       ssl_session_get_type(ssl->session.get()) != SSLSessionType::kTicket)) {
@@ -143,26 +143,24 @@ index 2df6fbc..6029b22 100644
          !hs->key_shares.TryPushBack(std::move(key_share))) {
        return false;
      }
-@@ -2779,6 +2815,13 @@ static bool ext_supported_groups_add_clienthello(const SSL_HANDSHAKE *hs,
+@@ -2779,6 +2815,12 @@ static bool ext_supported_groups_add_clienthello(const SSL_HANDSHAKE *hs,
      }
    }
  
 +  // uTLS Firefox declares FFDHE but does not implement it. Do not put these
 +  // IDs in the real supported-group/key-share list: selection must fail closed.
-+  const uint8_t profile = hs->config->client_fingerprint;
-+  if ((profile == 3 || profile == kFirefox148Fingerprint) &&
++  if (hs->config->client_fingerprint == kFirefox148Fingerprint &&
 +      (!CBB_add_u16(&groups_bytes, 256) || !CBB_add_u16(&groups_bytes, 257))) {
 +    return false;
 +  }
    return CBB_flush(out_compressible);
  }
  
-@@ -3315,6 +3358,13 @@ static bool ext_quic_transport_params_add_serverhello_legacy(SSL_HANDSHAKE *hs,
+@@ -3315,6 +3357,12 @@ static bool ext_quic_transport_params_add_serverhello_legacy(SSL_HANDSHAKE *hs,
  static bool ext_delegated_credential_add_clienthello(
      const SSL_HANDSHAKE *hs, CBB *out, CBB *out_compressible,
      ssl_client_hello_type_t type) {
-+  const uint8_t profile = hs->config->client_fingerprint;
-+  if (profile == 3 || profile == kFirefox148Fingerprint) {
++  if (hs->config->client_fingerprint == kFirefox148Fingerprint) {
 +    // Fixed template-only declaration, not delegated credential verification.
 +    static const uint8_t kDeclaration[] = {
 +        0, 34, 0, 10, 0, 8, 4, 3, 5, 3, 6, 3, 2, 3};
@@ -171,15 +169,14 @@ index 2df6fbc..6029b22 100644
    return true;
  }
  
-@@ -4114,8 +4164,28 @@ static bool ext_server_cert_type_add_serverhello(SSL_HANDSHAKE *hs, CBB *out) {
+@@ -4114,8 +4162,27 @@ static bool ext_server_cert_type_add_serverhello(SSL_HANDSHAKE *hs, CBB *out) {
    return true;
  }
  
 +static bool ext_profile_record_limit_add_clienthello(
 +    const SSL_HANDSHAKE *hs, CBB *out, CBB *out_compressible,
 +    ssl_client_hello_type_t type) {
-+  const uint8_t profile = hs->config->client_fingerprint;
-+  if (profile != 3 && profile != kFirefox148Fingerprint) {
++  if (hs->config->client_fingerprint != kFirefox148Fingerprint) {
 +    return true;
 +  }
 +  // uTLS's FakeRecordSizeLimitExtension. A response is explicitly rejected;
@@ -200,19 +197,17 @@ index 2df6fbc..6029b22 100644
      {
          TLSEXT_TYPE_server_name,
          ext_sni_add_clienthello,
-@@ -4355,6 +4425,69 @@ static_assert(kNumExtensions <=
+@@ -4355,6 +4422,65 @@ static_assert(kNumExtensions <=
                "too many extensions for received bitset");
  
  bool ssl_setup_extension_permutation(SSL_HANDSHAKE *hs) {
 +  const uint8_t profile = hs->config->client_fingerprint;
-+  if ((profile >= 3 && profile <= 9) || profile == kFirefox148Fingerprint ||
++  if ((profile >= 5 && profile <= 9) || profile == kFirefox148Fingerprint ||
 +      profile == kSafari263Fingerprint) {
-+    static const uint16_t kFirefox[] = {
-+        0, 23, 65281, 10, 11, 35, 16, 5, 34, 51, 43, 13, 45, 28, 65037};
 +    static const uint16_t kFirefox148[] = {
 +        0, 23, 65281, 10, 11, 16, 5, 34, 18, 51, 43, 13, 28, 27, 65037,
 +        35, 45};
-+    static const uint16_t kSafari[] = {
++    static const uint16_t kSafari263[] = {
 +        0, 23, 65281, 10, 11, 16, 5, 13, 18, 51, 45, 43, 27};
 +    static const uint16_t kIos[] = {
 +        0, 23, 65281, 10, 11, 16, 5, 13, 18, 51, 45, 43};
@@ -232,10 +227,8 @@ index 2df6fbc..6029b22 100644
 +    size_t at = 0;
 +    Span<const uint16_t> order;
 +    switch (profile) {
-+      case 3: order = kFirefox; break;
 +      case kFirefox148Fingerprint: order = kFirefox148; break;
-+      case 4:
-+      case kSafari263Fingerprint: order = kSafari; break;
++      case kSafari263Fingerprint: order = kSafari263; break;
 +      case 5: order = kIos; break;
 +      case 6: order = kAndroid; break;
 +      case 7: order = kEdge; break;
@@ -270,7 +263,7 @@ index 2df6fbc..6029b22 100644
    if (!hs->config->permute_extensions) {
      return true;
    }
-@@ -4510,6 +4643,22 @@ static bool ssl_add_clienthello_tlsext_inner(SSL_HANDSHAKE *hs, CBB *out,
+@@ -4510,6 +4636,22 @@ static bool ssl_add_clienthello_tlsext_inner(SSL_HANDSHAKE *hs, CBB *out,
    return true;
  }
  
@@ -293,7 +286,7 @@ index 2df6fbc..6029b22 100644
  bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
                                  ssl_client_hello_type_t type) {
    // `out` must contain the start of a ClientHello, which means it must begin
-@@ -4521,6 +4670,7 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+@@ -4521,6 +4663,7 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
      return ssl_add_clienthello_tlsext_inner(hs, out, out_encoded);
    }
  
@@ -301,7 +294,7 @@ index 2df6fbc..6029b22 100644
    assert(out_encoded == nullptr);  // Only ClientHelloInner needs two outputs.
    SSLImpl *const ssl = hs->ssl;
    CBB extensions;
-@@ -4575,8 +4725,35 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
+@@ -4575,8 +4718,34 @@ bool ssl_add_clienthello_tlsext(SSL_HANDSHAKE *hs, CBB *out, CBB *out_encoded,
    // intolerant to the last extension being zero-length. See
    // https://crbug.com/363583.
    bool offering_psk = should_offer_psk(hs, type);
@@ -310,10 +303,9 @@ index 2df6fbc..6029b22 100644
 +  const uint8_t profile = hs->config->client_fingerprint;
 +  if (profile != 0) {
 +    // Some fixed templates omit the padding extension.
-+    if (profile != 2 && profile != 3 && profile != 6 && profile != 8 &&
-+        profile != kChrome155Fingerprint && profile != kFirefox148Fingerprint &&
-+        profile != kSafari263Fingerprint && !SSL_is_dtls(ssl) &&
-+        !SSL_is_quic(ssl) &&
++    if (profile != 6 && profile != 8 && profile != kChrome155Fingerprint &&
++        profile != kFirefox148Fingerprint && profile != kSafari263Fingerprint &&
++        !SSL_is_dtls(ssl) && !SSL_is_quic(ssl) &&
 +        !ssl->s3->used_hello_retry_request) {
 +      const size_t psk_len = profile_pre_shared_key_clienthello_length(hs, type);
 +      profile_msg_len += 2 + CBB_len(&extensions) + psk_len;
@@ -340,7 +332,7 @@ index 2df6fbc..6029b22 100644
        return false;
      }
 diff --git a/ssl/handshake_client.cc b/ssl/handshake_client.cc
-index 3d57f34..aa9e81d 100644
+index 3d57f34..db08229 100644
 --- a/ssl/handshake_client.cc
 +++ b/ssl/handshake_client.cc
 @@ -122,6 +122,26 @@ static bool ssl_write_client_cipher_list(const SSL_HANDSHAKE *hs, CBB *out,
@@ -360,7 +352,7 @@ index 3d57f34..aa9e81d 100644
 +      }
 +      // Safari/iOS declare ECDHE-ECDSA-3DES without implementing it.
 +      const uint8_t profile = hs->config->client_fingerprint;
-+      if ((profile == 4 || profile == 5 || profile == kSafari263Fingerprint) &&
++      if ((profile == 5 || profile == kSafari263Fingerprint) &&
 +          id == 0xc012) {
 +        declaration = 0xc008;
 +      }
@@ -537,20 +529,21 @@ index 2f006e9..3ad9eb5 100644
    for (const auto &group : kNamedGroups) {
      if (group.nid == nid) {
 diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
-index 78b8778..bf49d5a 100644
+index 78b8778..562a904 100644
 --- a/ssl/ssl_lib.cc
 +++ b/ssl/ssl_lib.cc
-@@ -3324,6 +3324,54 @@ void SSL_set_permute_extensions(SSL *ssl, int enabled) {
+@@ -3324,6 +3324,55 @@ void SSL_set_permute_extensions(SSL *ssl, int enabled) {
    ssl_impl->config->permute_extensions = !!enabled;
  }
  
 +int SSL_set_client_fingerprint(SSL *ssl, unsigned profile) {
++  const bool supported_profile =
++      profile == 1 || (profile >= 5 && profile <= kSafari263Fingerprint);
 +  auto *ssl_impl = FromOpaque(ssl);
 +  if (!ssl || !ssl_impl->config || ssl_impl->server || SSL_is_dtls(ssl) ||
 +      SSL_is_quic(ssl) || ssl_impl->s3->initial_handshake_complete ||
 +      (ssl_impl->s3->hs != nullptr && ssl_impl->s3->hs->max_version != 0) ||
-+      ssl_impl->config->client_fingerprint != 0 || profile < 1 ||
-+      profile > kSafari263Fingerprint) {
++      ssl_impl->config->client_fingerprint != 0 || !supported_profile) {
 +    OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 +    return 0;
 +  }
@@ -569,7 +562,7 @@ index 78b8778..bf49d5a 100644
 +      SSL_CIPHER_AES_256_GCM_SHA384, SSL_CIPHER_CHACHA20_POLY1305_SHA256,
 +      SSL_CIPHER_AES_128_GCM_SHA256};
 +  Span<const uint16_t> order = Span(kChrome);
-+  if (profile == 3 || profile == kFirefox148Fingerprint) {
++  if (profile == kFirefox148Fingerprint) {
 +    order = Span(kFirefox);
 +  } else if (ssl_impl->config->compliance_policy ==
 +             ssl_compliance_policy_cnsa_202407) {

@@ -144,9 +144,9 @@ async fn native_tls_transcript_and_all_profiles_complete_without_wire_rewriting(
             for profile in [
                 None,
                 Some(ClientFingerprint::Chrome120),
-                Some(ClientFingerprint::Chrome133),
-                Some(ClientFingerprint::Firefox120),
-                Some(ClientFingerprint::Safari16),
+                Some(ClientFingerprint::Chrome155),
+                Some(ClientFingerprint::Firefox148),
+                Some(ClientFingerprint::Safari263),
             ] {
                 exchange(version, profile, "X25519", None, true).await;
             }
@@ -155,7 +155,7 @@ async fn native_tls_transcript_and_all_profiles_complete_without_wire_rewriting(
         // Server P-384 forces a real TLS 1.3 HRR for Chrome's first shares.
         exchange(
             SslVersion::TLS1_3,
-            Some(ClientFingerprint::Chrome133),
+            Some(ClientFingerprint::Chrome155),
             "P-384",
             None,
             true,
@@ -192,7 +192,7 @@ async fn cancelled_handshakes_drop_io_and_do_not_reuse_authentication_state() {
             let mut config = if round % 2 == 0 {
                 builder.build().configure().unwrap()
             } else {
-                FingerprintConnector::new(builder, ClientFingerprint::Chrome133)
+                FingerprintConnector::new(builder, ClientFingerprint::Chrome155)
                     .unwrap()
                     .configure(&[])
                     .unwrap()

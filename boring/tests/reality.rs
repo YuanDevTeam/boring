@@ -241,8 +241,6 @@ fn allowed_hybrid_preserves_classic_profiles_without_inventing_hybrid_shares() {
     use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
     for profile in [
         ClientFingerprint::Chrome120,
-        ClientFingerprint::Firefox120,
-        ClientFingerprint::Safari16,
         ClientFingerprint::Ios14,
         ClientFingerprint::Edge85,
         ClientFingerprint::Qq111,
@@ -296,12 +294,12 @@ fn hybrid_only_reality_authenticates_with_its_own_ecdh_component() {
 
 #[cfg(feature = "client-fingerprint")]
 #[test]
-fn explicit_hybrid_reality_preserves_chrome133_shares_and_authentication() {
+fn explicit_hybrid_reality_preserves_chrome155_shares_and_authentication() {
     use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
     let (server, config) = parameters();
     let connector = FingerprintConnector::new(
         SslConnector::builder(SslMethod::tls()).unwrap(),
-        ClientFingerprint::Chrome133,
+        ClientFingerprint::Chrome155,
     )
     .unwrap();
     let mut connection = connector.configure(b"\x02h2").unwrap();
@@ -322,11 +320,8 @@ fn named_profile_preserves_reality_wire_authentication() {
     let (server, config) = parameters();
     for profile in [
         ClientFingerprint::Chrome120,
-        ClientFingerprint::Chrome133,
         ClientFingerprint::Chrome155,
-        ClientFingerprint::Firefox120,
         ClientFingerprint::Firefox148,
-        ClientFingerprint::Safari16,
         ClientFingerprint::Safari263,
     ] {
         let connector =
@@ -349,10 +344,7 @@ fn named_profile_preserves_reality_wire_authentication() {
             authenticate_hello(&server, &msg);
             let (groups, shares) = hello_groups(&msg);
             assert!(!groups.contains(&4588));
-            let expected = if matches!(
-                profile,
-                ClientFingerprint::Firefox120 | ClientFingerprint::Firefox148
-            ) {
+            let expected = if profile == ClientFingerprint::Firefox148 {
                 vec![(29, 32), (23, 65)]
             } else {
                 vec![(29, 32)]
@@ -749,7 +741,7 @@ fn required_hybrid_reality_negotiates_hybrid_and_rejects_classic_selection() {
     use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
     let connector = FingerprintConnector::new(
         SslConnector::builder(SslMethod::tls()).unwrap(),
-        ClientFingerprint::Chrome133,
+        ClientFingerprint::Chrome155,
     )
     .unwrap();
     let make_client = |config: &RealityClientConfig| {
@@ -811,8 +803,8 @@ fn incompatible_profiles_or_later_share_changes_cannot_disable_hybrid_requiremen
     let (_, config) = parameters();
     for profile in [
         ClientFingerprint::Chrome120,
-        ClientFingerprint::Firefox120,
-        ClientFingerprint::Safari16,
+        ClientFingerprint::Ios14,
+        ClientFingerprint::Edge85,
     ] {
         let connector =
             FingerprintConnector::new(SslConnector::builder(SslMethod::tls()).unwrap(), profile)
@@ -887,9 +879,9 @@ fn each_profile_requires_temporary_certificate_hmac_and_native_proof() {
     use boring::ssl::{ClientFingerprint, FingerprintConnector, SslConnector};
     for profile in [
         ClientFingerprint::Chrome120,
-        ClientFingerprint::Chrome133,
-        ClientFingerprint::Firefox120,
-        ClientFingerprint::Safari16,
+        ClientFingerprint::Chrome155,
+        ClientFingerprint::Firefox148,
+        ClientFingerprint::Safari263,
     ] {
         let connector =
             FingerprintConnector::new(SslConnector::builder(SslMethod::tls()).unwrap(), profile)

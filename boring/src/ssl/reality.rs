@@ -56,7 +56,7 @@ impl RealityClientConfig {
     /// Requires an actual X25519MLKEM768 key share and negotiation.
     ///
     /// Classic X25519 remains the default. Configure a compatible group/share
-    /// list (for example Chrome133) before setting this config on a fresh SSL.
+    /// list (for example Chrome155) before setting this config on a fresh SSL.
     /// Missing hybrid shares and a peer selecting a classic group fail closed;
     /// this does not silently replace the selected ClientHello profile.
     #[must_use]

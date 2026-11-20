@@ -44,12 +44,11 @@ The opt-in [named ClientHello profile](client-fingerprint.md) can be combined
 with this interface. Authentication still owns the same native key share and
 final ClientHello bytes; the profile cannot bypass the REALITY verifier.
 
-With the selected-v1 templates, classic mode removes X25519MLKEM768 from both
+With named templates, classic mode removes X25519MLKEM768 from both
 advertised groups and actual shares, matching Mihomo's default classic behavior.
-It preserves other classic shares (including Firefox120's P-256) in order and
-binds authentication to the actual X25519 object, even if it is not first. Without
-explicit share configuration it selects X25519 alone. It creates no second
-identity key or global secret mapping; ordinary Chrome133 TLS still uses ML-KEM.
+It preserves the order of classic shares, including Firefox148's P-256, and
+authenticates with the actual X25519 object. Without explicit share configuration
+it selects X25519 alone. Ordinary TLS can still negotiate ML-KEM.
 
 ### Explicit required hybrid mode
 
@@ -58,16 +57,16 @@ identity key or global secret mapping; ordinary Chrome133 TLS still uses ML-KEM.
 ```rust,ignore
 let reality = RealityClientConfig::new(server_public_key, &short_id, [1, 8, 0])?
     .require_x25519mlkem768();
-// Select Chrome133 or a native group/share list including X25519MLKEM768 first.
+// Select Chrome155 or a native group/share list including X25519MLKEM768 first.
 ssl.set_reality_client(&reality)?;
 ```
 
 This requires both a real native X25519MLKEM768 ClientHello share and that group
 in the negotiated connection. A classic ServerHello fails before key-share
 decapsulation. HRR remains unsupported; there is no silent classic retry. The
-mode preserves an explicit compatible list; without explicit shares it selects
-the hybrid group alone. Chrome120, Firefox120 and Safari16 are incompatible with
-this mode, not templates to silently upgrade or rename.
+mode preserves an explicit compatible list and selects the hybrid group alone
+when no explicit shares are configured. Required hybrid mode rejects classic-only
+profiles such as Chrome120 and Ios14.
 
 Authentication uses the standalone X25519 share when present, otherwise the
 X25519 component of the actual hybrid share, matching Mihomo's server-side

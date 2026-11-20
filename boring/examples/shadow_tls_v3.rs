@@ -306,9 +306,9 @@ mod probe {
         let profile = match fields[3] {
             "none" => None,
             "chrome120" => Some(ClientFingerprint::Chrome120),
-            "chrome133" => Some(ClientFingerprint::Chrome133),
-            "firefox120" => Some(ClientFingerprint::Firefox120),
-            "safari16" => Some(ClientFingerprint::Safari16),
+            "chrome155" => Some(ClientFingerprint::Chrome155),
+            "firefox148" => Some(ClientFingerprint::Firefox148),
+            "safari263" => Some(ClientFingerprint::Safari263),
             _ => return Err("input"),
         };
         let mut config = if let Some(profile) = profile {

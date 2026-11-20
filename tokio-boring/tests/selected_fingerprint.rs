@@ -254,7 +254,7 @@ async fn classic_profile_suites(profile: ClientFingerprint) {
         ] {
             exchange_profile(profile, SslVersion::TLS1_2, "X25519", Some(cipher)).await;
         }
-        if profile == ClientFingerprint::Safari16 {
+        if profile == ClientFingerprint::Safari263 {
             for cipher in ["ECDHE-RSA-DES-CBC3-SHA", "DES-CBC3-SHA"] {
                 exchange_profile(profile, SslVersion::TLS1_2, "X25519", Some(cipher)).await;
             }
@@ -265,19 +265,19 @@ async fn classic_profile_suites(profile: ClientFingerprint) {
 }
 
 #[tokio::test]
-async fn firefox120_negotiates_declared_classic_groups_and_ciphers() {
-    classic_profile_suites(ClientFingerprint::Firefox120).await;
+async fn firefox148_negotiates_declared_classic_groups_and_ciphers() {
+    classic_profile_suites(ClientFingerprint::Firefox148).await;
 }
 
 #[tokio::test]
-async fn safari16_negotiates_declared_classic_groups_and_real_legacy_ciphers() {
-    classic_profile_suites(ClientFingerprint::Safari16).await;
+async fn safari263_negotiates_declared_classic_groups_and_real_legacy_ciphers() {
+    classic_profile_suites(ClientFingerprint::Safari263).await;
 }
 
 #[tokio::test]
 async fn firefox_and_safari_keep_the_callers_tls12_floor() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        for profile in [ClientFingerprint::Firefox120, ClientFingerprint::Safari16] {
+        for profile in [ClientFingerprint::Firefox148, ClientFingerprint::Safari263] {
             for version in [SslVersion::TLS1, SslVersion::TLS1_1] {
                 let (io, remote) = tokio::io::duplex(4096);
                 let task = tokio::spawn(async move {
@@ -341,7 +341,7 @@ impl boring::ssl::CertificateCompressor for BrotliCertificate {
 #[tokio::test]
 async fn chrome_profiles_retain_bounded_brotli_and_reject_wrong_payload_algorithm() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        for profile in [ClientFingerprint::Chrome120, ClientFingerprint::Chrome133] {
+        for profile in [ClientFingerprint::Chrome120, ClientFingerprint::Chrome155] {
             for mode in 0..5 {
                 let mut acceptor = server(SslVersion::TLS1_3, "X25519");
                 acceptor
@@ -421,7 +421,7 @@ impl boring::ssl::CertificateCompressor for ZlibCertificate {
 }
 
 #[tokio::test]
-async fn safari16_real_zlib_rejects_truncation_corruption_trailing_and_oversize() {
+async fn safari263_real_zlib_rejects_truncation_corruption_trailing_and_oversize() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         for mode in 0..8 {
             let mut acceptor = server(SslVersion::TLS1_3, "X25519");
@@ -452,7 +452,7 @@ async fn safari16_real_zlib_rejects_truncation_corruption_trailing_and_oversize(
                     Ok(())
                 }
             });
-            let connector = FingerprintConnector::new(b, ClientFingerprint::Safari16).unwrap();
+            let connector = FingerprintConnector::new(b, ClientFingerprint::Safari263).unwrap();
             let mut config = connector.configure(b"\x02h2").unwrap();
             config.set_verify_hostname(false);
             let result = tokio_boring::connect(config, "profile.test", io).await;
@@ -539,7 +539,7 @@ async fn firefox148_negotiates_p256_without_retry_and_decodes_a_zstd_certificate
 }
 
 #[tokio::test]
-async fn chrome133_negotiates_mlkem_x25519_hrr_and_tls12_with_data() {
+async fn chrome155_negotiates_mlkem_x25519_hrr_and_tls12_with_data() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         for (version, group, expected_id, hrr) in [
             (SslVersion::TLS1_3, "X25519MLKEM768", 4588, false),
@@ -563,7 +563,7 @@ async fn chrome133_negotiates_mlkem_x25519_hrr_and_tls12_with_data() {
             let mut b = SslConnector::builder(SslMethod::tls()).unwrap();
             b.set_min_proto_version(Some(SslVersion::TLS1_2)).unwrap();
             b.set_custom_verify_callback(SslVerifyMode::PEER, |_| Ok(()));
-            let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome133).unwrap();
+            let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome155).unwrap();
             let mut config = connector.configure(b"\x02h2").unwrap();
             config.set_verify_hostname(false);
             let mut tls = tokio_boring::connect(config, "profile.test", io)
@@ -587,7 +587,7 @@ async fn chrome133_negotiates_mlkem_x25519_hrr_and_tls12_with_data() {
 }
 
 #[tokio::test]
-async fn chrome133_negotiates_only_new_alps_with_absent_empty_and_nonempty_results() {
+async fn chrome155_negotiates_only_new_alps_with_absent_empty_and_nonempty_results() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         for (new_codepoint, settings) in [
             (false, Some(&b"old"[..])),
@@ -625,7 +625,7 @@ async fn chrome133_negotiates_only_new_alps_with_absent_empty_and_nonempty_resul
             });
             let mut b = SslConnector::builder(SslMethod::tls()).unwrap();
             b.set_custom_verify_callback(SslVerifyMode::PEER, |_| Ok(()));
-            let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome133).unwrap();
+            let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome155).unwrap();
             let mut config = connector.configure(b"\x02h2").unwrap();
             config.set_verify_hostname(false);
             let mut tls = tokio_boring::connect(config, "profile.test", io)
@@ -646,8 +646,8 @@ async fn chrome133_negotiates_only_new_alps_with_absent_empty_and_nonempty_resul
 }
 
 #[tokio::test]
-async fn chrome133_real_ticket_resumption_and_rejected_ticket_full_handshake() {
-    profile_ticket_resumption(ClientFingerprint::Chrome133, "X25519MLKEM768").await;
+async fn chrome155_real_ticket_resumption_and_rejected_ticket_full_handshake() {
+    profile_ticket_resumption(ClientFingerprint::Chrome155, "X25519MLKEM768").await;
 }
 
 #[tokio::test]
@@ -838,7 +838,7 @@ async fn profile_ticket_resumption(profile: ClientFingerprint, group: &'static s
 }
 
 #[tokio::test]
-async fn chrome133_rejects_bad_certificate_and_forged_handshake_signature() {
+async fn chrome155_rejects_bad_certificate_and_forged_handshake_signature() {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         for bad_signature in [false, true] {
             let mut acceptor = server(SslVersion::TLS1_3, "X25519MLKEM768");
@@ -861,7 +861,7 @@ async fn chrome133_rejects_bad_certificate_and_forged_handshake_signature() {
                     ))
                 }
             });
-            let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome133).unwrap();
+            let connector = FingerprintConnector::new(b, ClientFingerprint::Chrome155).unwrap();
             let mut config = connector.configure(b"\x02h2").unwrap();
             config.set_verify_hostname(false);
             let error = tokio_boring::connect(config, "profile.test", io)
@@ -896,9 +896,9 @@ async fn all_classic_reality_profiles_reject_hrr_and_tls12() {
     tokio::time::timeout(std::time::Duration::from_secs(15), async {
         for profile in [
             ClientFingerprint::Chrome120,
-            ClientFingerprint::Chrome133,
-            ClientFingerprint::Firefox120,
-            ClientFingerprint::Safari16,
+            ClientFingerprint::Chrome155,
+            ClientFingerprint::Firefox148,
+            ClientFingerprint::Safari263,
         ] {
             for (version, group, expected) in [
                 (SslVersion::TLS1_2, "X25519", "UNSUPPORTED_PROTOCOL"),
@@ -1038,9 +1038,9 @@ async fn reject_server_hello(
 }
 
 #[tokio::test]
-async fn chrome133_rejects_malformed_server_key_share() {
+async fn chrome155_rejects_malformed_server_key_share() {
     reject_server_hello(
-        ClientFingerprint::Chrome133,
+        ClientFingerprint::Chrome155,
         SslVersion::TLS1_3,
         ServerHelloFault::ShareLength,
         "DECODE_ERROR",
@@ -1049,10 +1049,10 @@ async fn chrome133_rejects_malformed_server_key_share() {
 }
 
 #[tokio::test]
-async fn firefox120_rejects_template_only_selections() {
+async fn firefox148_rejects_template_only_selections() {
     for kind in [28, 34] {
         reject_server_hello(
-            ClientFingerprint::Firefox120,
+            ClientFingerprint::Firefox148,
             SslVersion::TLS1_2,
             ServerHelloFault::Extension(kind),
             "UNEXPECTED_EXTENSION",
@@ -1060,7 +1060,7 @@ async fn firefox120_rejects_template_only_selections() {
         .await;
     }
     reject_server_hello(
-        ClientFingerprint::Firefox120,
+        ClientFingerprint::Firefox148,
         SslVersion::TLS1_3,
         ServerHelloFault::FfdheSelection,
         "WRONG_CURVE",
@@ -1069,9 +1069,9 @@ async fn firefox120_rejects_template_only_selections() {
 }
 
 #[tokio::test]
-async fn safari16_rejects_utls_fake_cipher_selection() {
+async fn safari263_rejects_utls_fake_cipher_selection() {
     reject_server_hello(
-        ClientFingerprint::Safari16,
+        ClientFingerprint::Safari263,
         SslVersion::TLS1_2,
         ServerHelloFault::FakeCipher,
         "WRONG_CIPHER_RETURNED",

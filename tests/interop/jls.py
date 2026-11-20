@@ -276,7 +276,7 @@ def main():
                 if not passed:
                     raise RuntimeError(f"case failed: {label}")
 
-            for profile in ("none", "chrome120", "chrome133", "firefox120", "safari16"):
+            for profile in ("none", "chrome120", "chrome155", "firefox148", "safari263"):
                 for v6 in (False, True):
                     probe(f"{profile}-v{6 if v6 else 4}", profile=profile, v6=v6)
             probe(

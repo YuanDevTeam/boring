@@ -15,13 +15,6 @@ pub enum ClientFingerprint {
     /// Chrome 120's classic X25519 profile. Transport ALPN remains caller-owned.
     /// This does not emulate HTTP/2 settings, QUIC, actual ECH or browser runtime.
     Chrome120,
-    /// Chrome 133 with native X25519MLKEM768 + X25519 shares and new h2 ALPS.
-    /// REALITY requires a separate explicit config; this does not shape QUIC.
-    Chrome133,
-    /// Firefox 120, with X25519/P-256 shares and its fixed extension order.
-    Firefox120,
-    /// Safari 16.0's stream profile. The caller still owns the TLS version floor.
-    Safari16,
     /// iOS 14 stream profile, with CBC-SHA256 offers and no certificate compression.
     Ios14,
     /// Android 11 OkHttp's TLS 1.2 profile, without GREASE or compression.
@@ -70,9 +63,6 @@ impl ClientFingerprint {
     fn profile(self) -> &'static Profile {
         match self {
             Self::Chrome120 => &CHROME120,
-            Self::Chrome133 => &CHROME133,
-            Self::Firefox120 => &FIREFOX120,
-            Self::Safari16 => &SAFARI16,
             Self::Ios14 => &IOS14,
             Self::Android11 => &ANDROID11,
             Self::Edge85 => &EDGE85,
@@ -112,51 +102,16 @@ const CHROME120: Profile = Profile {
     tls12_only: false,
 };
 
-const CHROME133: Profile = Profile {
-    native_id: 2,
-    groups: &[4588, 29, 23, 24],
-    key_shares: &[4588, 29],
-    alps_new_codepoint: Some(true),
-    ..CHROME120
-};
-
-const FIREFOX120: Profile = Profile {
-    native_id: 3,
-    ciphers: concat!(
-        "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:",
-        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:",
-        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:",
-        "ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
-        "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:",
-        "AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA"
-    ),
-    groups: &[29, 23, 24, 25],
-    key_shares: &[29, 23],
-    signatures: concat!(
-        "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_secp521r1_sha512:",
-        "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_sha512:",
-        "rsa_pkcs1_sha256:rsa_pkcs1_sha384:rsa_pkcs1_sha512:ecdsa_sha1:rsa_pkcs1_sha1"
-    ),
-    grease: false,
-    shuffle: false,
-    sct: false,
-    ech_grease: true,
-    alps_new_codepoint: None,
-    compression: &[],
-    requested_trust_anchors: &[],
-    tls12_floor: false,
-    tls12_only: false,
-};
-
-const SAFARI16: Profile = Profile {
-    native_id: 4,
+// Independently implemented from observed uTLS v1.8.8 HelloIOS_14 wire fields.
+const IOS14: Profile = Profile {
+    native_id: 5,
     ciphers: concat!(
         "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:",
         "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384:",
         "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305:",
-        "ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
-        "ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES128-SHA:",
-        "AES256-GCM-SHA384:AES128-GCM-SHA256:AES256-SHA:AES128-SHA:",
+        "ECDHE-ECDSA-AES128-SHA256:ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
+        "ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES128-SHA:",
+        "AES256-GCM-SHA384:AES128-GCM-SHA256:AES128-SHA256:AES256-SHA:AES128-SHA:",
         "ECDHE-RSA-DES-CBC3-SHA:DES-CBC3-SHA"
     ),
     groups: &[29, 23, 24, 25],
@@ -171,28 +126,10 @@ const SAFARI16: Profile = Profile {
     sct: true,
     ech_grease: false,
     alps_new_codepoint: None,
-    compression: &[Compression::Zlib],
+    compression: &[],
     requested_trust_anchors: &[],
     tls12_floor: false,
     tls12_only: false,
-};
-
-// Independently implemented from observed uTLS v1.8.8 HelloIOS_14 wire fields.
-// It has its own cipher/compression policy; sharing immutable group/signature
-// values does not select Safari's native profile or compression extension.
-const IOS14: Profile = Profile {
-    native_id: 5,
-    ciphers: concat!(
-        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:",
-        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384:",
-        "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305:",
-        "ECDHE-ECDSA-AES128-SHA256:ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
-        "ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES128-SHA:",
-        "AES256-GCM-SHA384:AES128-GCM-SHA256:AES128-SHA256:AES256-SHA:AES128-SHA:",
-        "ECDHE-RSA-DES-CBC3-SHA:DES-CBC3-SHA"
-    ),
-    compression: &[],
-    ..SAFARI16
 };
 
 // Fixed upstream profiles: MetaCubeX/utls HelloAndroid_11_OkHttp,
@@ -287,29 +224,59 @@ const CHROME155_TRUST_ANCHORS: &[u8] = b"\
 
 const CHROME155: Profile = Profile {
     native_id: 10,
+    groups: &[4588, 29, 23, 24],
+    key_shares: &[4588, 29],
     signatures: concat!(
         "mldsa44:mldsa65:mldsa87:",
         "ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:",
         "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
         "rsa_pss_rsae_sha512:rsa_pkcs1_sha512"
     ),
+    alps_new_codepoint: Some(true),
     requested_trust_anchors: CHROME155_TRUST_ANCHORS,
     tls12_floor: true,
-    ..CHROME133
+    ..CHROME120
 };
 
 const FIREFOX148: Profile = Profile {
     native_id: 11,
+    ciphers: concat!(
+        "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:",
+        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:",
+        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:",
+        "ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
+        "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:",
+        "AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA"
+    ),
     groups: &[4588, 29, 23, 24, 25],
     key_shares: &[4588, 29, 23],
+    signatures: concat!(
+        "ecdsa_secp256r1_sha256:ecdsa_secp384r1_sha384:ecdsa_secp521r1_sha512:",
+        "rsa_pss_rsae_sha256:rsa_pss_rsae_sha384:rsa_pss_rsae_sha512:",
+        "rsa_pkcs1_sha256:rsa_pkcs1_sha384:rsa_pkcs1_sha512:ecdsa_sha1:rsa_pkcs1_sha1"
+    ),
+    grease: false,
+    shuffle: false,
     sct: true,
+    ech_grease: true,
+    alps_new_codepoint: None,
     compression: &[Compression::Zlib, Compression::Brotli, Compression::Zstd],
+    requested_trust_anchors: &[],
     tls12_floor: true,
-    ..FIREFOX120
+    tls12_only: false,
 };
 
 const SAFARI263: Profile = Profile {
     native_id: 12,
+    ciphers: concat!(
+        "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:",
+        "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384:",
+        "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305:",
+        "ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA:",
+        "ECDHE-RSA-AES256-SHA:ECDHE-RSA-AES128-SHA:",
+        "AES256-GCM-SHA384:AES128-GCM-SHA256:AES256-SHA:AES128-SHA:",
+        "ECDHE-RSA-DES-CBC3-SHA:DES-CBC3-SHA"
+    ),
     groups: &[4588, 29, 23, 24, 25],
     key_shares: &[4588, 29],
     signatures: concat!(
@@ -317,8 +284,15 @@ const SAFARI263: Profile = Profile {
         "ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:",
         "rsa_pss_rsae_sha512:rsa_pkcs1_sha512:rsa_pkcs1_sha1"
     ),
+    grease: true,
+    shuffle: false,
+    sct: true,
+    ech_grease: false,
+    alps_new_codepoint: None,
+    compression: &[Compression::Zlib],
+    requested_trust_anchors: &[],
     tls12_floor: true,
-    ..SAFARI16
+    tls12_only: false,
 };
 
 /// Immutable profile plus caller-configured TLS trust, versions and identity.

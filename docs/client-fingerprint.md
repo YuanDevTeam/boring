@@ -9,18 +9,16 @@ fork. Each `ClientFingerprint` variant selects a fixed profile.
 
 | Family | Variants |
 | --- | --- |
-| Chrome | `Chrome120`, `Chrome133`, `Chrome155` |
-| Firefox | `Firefox120`, `Firefox148` |
-| Safari | `Safari16` (16.0), `Safari263` (26.3) |
+| Chrome | `Chrome120`, `Chrome155` |
+| Firefox | `Firefox148` |
+| Safari | `Safari263` (26.3) |
 | iOS and Android | `Ios14`, `Android11` (OkHttp) |
 | Edge, 360 Browser and QQ | `Edge85`, `ThreeSixty75` (7.5), `Qq111` (11.1) |
 
-Existing variants retain their version and encoding. Applications must reject
-unknown names and explicitly select any newer variant. `Android11` and
+Applications select a versioned variant explicitly. The retired Chrome 133,
+Firefox 120 and Safari 16.0 profiles are unavailable. `Android11` and
 `ThreeSixty75` cap negotiation at TLS 1.2 and retain any stricter caller floor.
-`Chrome120` offers a classic X25519 share. `Chrome133` adds a hybrid share and
-the newer optional ALPS codepoint, and omits padding. `Firefox120` offers X25519
-and P-256 shares in a fixed order.
+`Chrome120` offers a classic X25519 share.
 
 ## Interface
 
@@ -59,7 +57,7 @@ The profile configures ciphers, supported groups, signature algorithms, GREASE,
 extension permutation, SCT/OCSP, ECH GREASE and template-specific h2 ALPS.
 Chrome uses Brotli certificate decompression and Safari uses Zlib.
 `Firefox148` offers actual Zlib, Brotli and Zstd decoders in that order.
-`Firefox120` and `Ios14` omit certificate compression. The native certificate
+`Ios14` omits certificate compression. The native certificate
 message allocation and decoder output are bounded to 128 KiB. The Zstd decoder
 also limits its window to 128 KiB and requires a single complete frame.
 Certificate and handshake signature verification stay active. The caller still
@@ -118,7 +116,7 @@ preserving the remaining shares, including Firefox's P-256.
 The [CF4 fork-local checks](client-fingerprint-cf4-fork.md) preserve the original
 profile coverage.
 
-`Chrome133`, `Chrome155`, `Firefox148` and `Safari263` offer the native group
+`Chrome155`, `Firefox148` and `Safari263` offer the native group
 and share needed by `RealityClientConfig::require_x25519mlkem768`. This mode
 requires actual hybrid negotiation and native REALITY authentication. The other
 fixed profiles fail when hybrid is required. `allow_x25519mlkem768` preserves
@@ -150,9 +148,8 @@ and is deprecated/default-off outside explicit cipher configuration. No RC4 was
 restored. Safari's repeated signature scheme is a wire encoding detail; real
 signature verification preferences remain unique.
 
-For `Safari16`, a caller's TLS 1.2 floor trims the reference TLS 1.0/1.1
-advertisement. Both Safari profiles omit the cold session-ticket extension. An
-eligible TLS 1.2 ticket can still be offered on a warm connection. Zlib rejects
+`Safari263` omits the cold session-ticket extension. An eligible TLS 1.2 ticket
+can still be offered on a warm connection. Zlib rejects
 truncation, corrupt checksums, trailing bytes and oversized output before passing
 the certificate to the verifier.
 
